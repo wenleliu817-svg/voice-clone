@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>有道声音克隆 · 批量合成</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- Overlay for during synthesis -->
+  <div id="overlay" class="overlay hidden">
+    <div class="overlay-content">
+      <div class="spinner"></div>
+      <p class="overlay-text">正在合成中，请稍候…</p>
+      <div class="progress-info">
+        <span id="progress-status">等待中</span>
+        <span id="progress-count">0 / 0</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="container">
+    <header>
+      <h1><i class="fa-solid fa-microphone-lines"></i> 有道声音克隆</h1>
+      <p class="subtitle">上传音色样本 & 批量合成语音</p>
+    </header>
+
+    <!-- Step 1: Credentials -->
+    <section class="card">
+      <div class="card-header">
+        <span class="step-badge">1</span>
+        <h2>API 凭证</h2>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>App Key</label>
+          <input type="text" id="appKey" placeholder="输入有道 App Key">
+        </div>
+        <div class="form-group">
+          <label>App Secret</label>
+          <input type="password" id="appSecret" placeholder="输入有道 App Secret">
+          <button type="button" class="toggle-pw" onclick="toggleSecret()">
+            <i class="fa-regular fa-eye" id="eye-icon"></i>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Step 2: Voice Clone -->
+    <section class="card">
+      <div class="card-header">
+        <span class="step-badge">2</span>
+        <h2>音色克隆</h2>
+      </div>
+      <div class="upload-zone" id="audio-dropzone">
+        <i class="fa-solid fa-cloud-arrow-up"></i>
+        <p>拖拽 .wav 音频文件到此处，或 <span class="link" onclick="document.getElementById('audioFile').click()">点击选择</span></p>
+        <input type="file" id="audioFile" accept=".wav,audio/wav" hidden>
+        <p class="hint">推荐 5-10 秒清晰人声样本</p>
+      </div>
+      <div id="audio-preview" class="file-preview hidden">
+        <div class="file-info">
+          <i class="fa-solid fa-file-audio file-icon"></i>
+          <span id="audio-filename" class="filename"></span>
+          <button class="btn-icon" onclick="clearAudio()" title="移除"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <button class="btn btn-primary" id="btn-clone" onclick="cloneVoice()">
+          <i class="fa-solid fa-fingerprint"></i> 克隆音色
+        </button>
+      </div>
+      <div id="voice-id-display" class="result-tag hidden"></div>
+    </section>
+
+    <!-- Step 3: Text & Emotion -->
+    <section class="card">
+      <div class="card-header">
+        <span class="step-badge">3</span>
+        <h2>合成内容</h2>
+        <div class="tab-switch">
+          <button class="tab-btn active" onclick="switchTab('excel')" id="tab-excel">Excel 导入</button>
+          <button class="tab-btn" onclick="switchTab('manual')" id="tab-manual">手动输入</button>
+        </div>
+      </div>
+
+      <!-- Excel Tab -->
+      <div id="panel-excel" class="tab-panel">
+        <div class="upload-zone" id="excel-dropzone">
+          <i class="fa-solid fa-file-excel"></i>
+          <p>拖拽 Excel 文件到此处，或 <span class="link" onclick="document.getElementById('excelFile').click()">点击选择</span></p>
+          <input type="file" id="excelFile" accept=".xlsx,.xls" hidden>
+          <p class="hint">要求包含「文本」和「情绪」两列</p>
+        </div>
+        <div class="actions">
+          <button class="btn btn-outline" onclick="downloadTemplate()">
+            <i class="fa-solid fa-download"></i> 下载 Excel 模板
+          </button>
+        </div>
+        <div id="excel-preview" class="preview-table-wrapper hidden">
+          <table class="preview-table">
+            <thead><tr><th>#</th><th>文本</th><th>情绪</th></tr></thead>
+            <tbody id="excel-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Manual Tab -->
+      <div id="panel-manual" class="tab-panel hidden">
+        <div id="manual-rows">
+          <div class="manual-row">
+            <input type="text" class="input-text" placeholder="输入要合成的文本">
+            <select class="input-emotion">
+              <option value="">自然</option>
+              <option value="开心">开心</option>
+              <option value="悲伤">悲伤</option>
+              <option value="愤怒">愤怒</option>
+              <option value="恐惧">恐惧</option>
+              <option value="厌恶">厌恶</option>
+              <option value="惊讶">惊讶</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn btn-outline" onclick="addManualRow()">
+          <i class="fa-solid fa-plus"></i> 添加一行
+        </button>
+      </div>
+    </section>
+
+    <!-- Step 4: Settings & Run -->
+    <section class="card">
+      <div class="card-header">
+        <span class="step-badge">4</span>
+        <h2>合成设置</h2>
+      </div>
+      <div class="form-row settings">
+        <div class="form-group">
+          <label>音频格式</label>
+          <select id="format"><option value="wav">WAV</option><option value="mp3">MP3</option></select>
+        </div>
+        <div class="form-group">
+          <label>语速 (0.5 - 2.0)</label>
+          <input type="number" id="speed" min="0.5" max="2.0" step="0.1" value="1.0">
+        </div>
+        <div class="form-group">
+          <label>音量 (0.5 - 2.0)</label>
+          <input type="number" id="volume" min="0.5" max="2.0" step="0.1" value="1.0">
+        </div>
+      </div>
+      <button class="btn btn-primary btn-large" id="btn-synthesize" onclick="startSynthesis()">
+        <i class="fa-solid fa-wand-magic-sparkles"></i> 开始合成
+      </button>
+    </section>
+
+    <!-- Step 5: Results -->
+    <section class="card hidden" id="results-card">
+      <div class="card-header">
+        <h2><i class="fa-solid fa-music"></i> 合成结果</h2>
+        <button class="btn btn-outline" onclick="downloadAllZip()">
+          <i class="fa-solid fa-file-zipper"></i> 全部下载（ZIP）
+        </button>
+      </div>
+      <div id="results-list" class="results-list"></div>
+    </section>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
