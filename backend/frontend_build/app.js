@@ -37,10 +37,21 @@ function normalizeBaseUrl(value) {
   return String(value || "").trim().replace(/\/+$/, "");
 }
 
+function getQueryApiBase() {
+  try {
+    return normalizeBaseUrl(new URLSearchParams(window.location.search).get("apiBase"));
+  } catch {
+    return "";
+  }
+}
+
 function getDefaultApiBase() {
+  const queryBase = getQueryApiBase();
+  if (queryBase) return queryBase;
   const saved = normalizeBaseUrl(localStorage.getItem(STORAGE_KEYS.apiBase));
   if (saved) return saved;
   if (window.location.protocol === "file:") return "http://localhost:5001";
+  if (window.location.hostname.endsWith("github.io")) return "";
   return normalizeBaseUrl(window.location.origin) || "http://localhost:5001";
 }
 
@@ -76,6 +87,25 @@ function escapeHtml(value) {
 function csvEscape(value) {
   const text = String(value ?? "");
   return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+async function requestJson(path, options = {}, label = "请求") {
+  if (!API_BASE) {
+    throw new Error("请先填写后端地址，再进行操作。GitHub Pages 不能直接代替后端。");
+  }
+  const response = await fetch(`${API_BASE}${path}`, options);
+  const raw = await response.text();
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    const snippet = raw.replace(/\s+/g, " ").slice(0, 120);
+    throw new Error(`${label} 返回了 HTML 内容，通常是后端地址不对。当前地址：${API_BASE}。响应片段：${snippet}`);
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    const snippet = raw.replace(/\s+/g, " ").slice(0, 120);
+    throw new Error(`${label} 返回了无法解析的 JSON。当前地址：${API_BASE}。响应片段：${snippet}`);
+  }
 }
 
 let API_BASE = getDefaultApiBase();
@@ -358,8 +388,7 @@ async function cloneVoice() {
   formData.append("language", selectedLanguage);
   formData.append("audio", audioFile, audioFile.name);
   try {
-    const response = await fetch(`${API_BASE}/api/clone`, { method: "POST", body: formData });
-    const payload = await response.json();
+    const payload = await requestJson("/api/clone", { method: "POST", body: formData }, "克隆请求");
     if (String(payload.code) !== "0") {
       showMsg("克隆失败: " + (payload.message || JSON.stringify(payload)));
       return;
@@ -431,7 +460,7 @@ async function startSynthesis() {
   currentTaskId = null;
 
   try {
-    const response = await fetch(`${API_BASE}/api/synthesize`, {
+    const payload = await requestJson("/api/synthesize", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -445,8 +474,7 @@ async function startSynthesis() {
         speed: parseFloat($("speed").value),
         volume: parseFloat($("volume").value),
       }),
-    });
-    const payload = await response.json();
+    }, "合成提交");
     if (String(payload.code) !== "0") {
       hide($("overlay"));
       showMsg("提交失败: " + (payload.message || JSON.stringify(payload)));
@@ -464,8 +492,7 @@ async function pollProgress(appKey, appSecret) {
   while (true) {
     await new Promise(resolve => setTimeout(resolve, 3000));
     try {
-      const response = await fetch(`${API_BASE}/api/progress/${currentTaskId}?appKey=${encodeURIComponent(appKey)}&appSecret=${encodeURIComponent(appSecret)}`);
-      const payload = await response.json();
+      const payload = await requestJson(`/api/progress/${currentTaskId}?appKey=${encodeURIComponent(appKey)}&appSecret=${encodeURIComponent(appSecret)}`, {}, "进度查询");
       if (String(payload.code) !== "0") continue;
       const data = payload.data || {};
       const status = data.status || "UNKNOWN";
@@ -486,8 +513,7 @@ async function pollProgress(appKey, appSecret) {
 
 async function fetchResults(appKey, appSecret) {
   try {
-    const response = await fetch(`${API_BASE}/api/results/${currentTaskId}?appKey=${encodeURIComponent(appKey)}&appSecret=${encodeURIComponent(appSecret)}`);
-    const payload = await response.json();
+    const payload = await requestJson(`/api/results/${currentTaskId}?appKey=${encodeURIComponent(appKey)}&appSecret=${encodeURIComponent(appSecret)}`, {}, "结果查询");
     if (String(payload.code) !== "0") {
       showMsg("获取结果失败: " + (payload.message || "未知错误"));
       return;
@@ -528,6 +554,10 @@ function initApp() {
   if (apiInput) {
     apiInput.value = API_BASE;
     apiInput.addEventListener("change", () => saveApiBase(apiInput.value));
+  }
+
+  if (!API_BASE) {
+    showMsg("请先填写后端地址。这个 GitHub Pages 页面只负责前端，真正的接口要指向你自己的后端。");
   }
 
   const languageSelect = $("language-select");
