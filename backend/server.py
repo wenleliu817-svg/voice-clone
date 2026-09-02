@@ -127,6 +127,8 @@ def clone_voice():
     app_secret = request.form.get("appSecret", "").strip()
     voice_name = request.form.get("voiceName", "MyVoice").strip()
     model = request.form.get("model", "pro")
+    sample_rate = request.form.get("sampleRate", "16000").strip() or "16000"
+    channel = request.form.get("channel", "1").strip() or "1"
     audio = request.files.get("audio")
 
     if not app_key or not app_secret:
@@ -144,6 +146,8 @@ def clone_voice():
         "signType": "v4",
         "name": voice_name[:50],
         "model": model,
+        "sampleRate": sample_rate,
+        "channel": channel,
     }
     files = {"audioFile": (secure_filename(audio.filename), audio.read())}
     if emotion_audio:
@@ -199,6 +203,8 @@ def synthesize():
     audio_format = data.get("format", "wav")
     volume = data.get("volume")
     speed = data.get("speed")
+    sample_rate = str(data.get("sampleRate", "16000")).strip() or "16000"
+    channel = str(data.get("channel", "1")).strip() or "1"
 
     if not app_key or not app_secret:
         return jsonify({"error": "Missing appKey or appSecret"}), 400
@@ -236,6 +242,8 @@ def synthesize():
         "signType": "v4",
         "voiceId": voice_id,
         "format": audio_format,
+        "sampleRate": sample_rate,
+        "channel": channel,
         "qList": q_list,
     }
     if volume is not None:

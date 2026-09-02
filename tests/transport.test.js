@@ -3,6 +3,7 @@ const {
   buildRequestUrl,
   buildMediaUrl,
   isOfficialYoudaoOrigin,
+  resolveBackendBase,
 } = require("../docs/transport.js");
 
 function run() {
@@ -10,9 +11,35 @@ function run() {
   assert.strictEqual(isOfficialYoudaoOrigin("https://example.com"), false);
 
   assert.strictEqual(
+    resolveBackendBase({
+      queryBase: "",
+      locationProtocol: "https:",
+      locationHostname: "wenleliu817-svg.github.io",
+    }),
+    "https://voice-clone.onrender.com"
+  );
+
+  assert.strictEqual(
+    resolveBackendBase({
+      queryBase: "https://api.example.com/",
+      locationProtocol: "https:",
+      locationHostname: "wenleliu817-svg.github.io",
+    }),
+    "https://api.example.com"
+  );
+
+  assert.strictEqual(
+    resolveBackendBase({
+      queryBase: "",
+      locationProtocol: "file:",
+      locationHostname: "",
+    }),
+    "http://localhost:5001"
+  );
+
+  assert.strictEqual(
     buildRequestUrl({
       backendBase: "https://api.example.com",
-      corsProxyKey: "abc123",
       path: "/api/clone",
     }),
     "https://api.example.com/api/clone"
@@ -21,25 +48,22 @@ function run() {
   assert.throws(
     () => buildRequestUrl({
       backendBase: "https://openapi.youdao.com",
-      corsProxyKey: "abc123",
       path: "/api/clone",
     }),
     /不能直接填写 openapi\.youdao\.com/
   );
 
-  assert.strictEqual(
-    buildRequestUrl({
+  assert.throws(
+    () => buildRequestUrl({
       backendBase: "",
-      corsProxyKey: "abc123",
       path: "/tts_gateway/v2/upload",
     }),
-    "https://corsproxy.io/?key=abc123&url=https%3A%2F%2Fopenapi.youdao.com%2Ftts_gateway%2Fv2%2Fupload"
+    /请先配置后端地址/
   );
 
   assert.strictEqual(
     buildMediaUrl({
       backendBase: "https://api.example.com",
-      corsProxyKey: "",
       mediaUrl: "https://cdn.example.com/audio.wav",
       filename: "audio_1.wav",
     }),
@@ -49,11 +73,10 @@ function run() {
   assert.strictEqual(
     buildMediaUrl({
       backendBase: "",
-      corsProxyKey: "abc123",
       mediaUrl: "https://cdn.example.com/audio.wav",
       filename: "audio_1.wav",
     }),
-    "https://corsproxy.io/?key=abc123&url=https%3A%2F%2Fcdn.example.com%2Faudio.wav"
+    "https://cdn.example.com/audio.wav"
   );
 
   console.log("transport.test.js passed");

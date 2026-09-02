@@ -1,6 +1,4 @@
 const STORAGE_KEYS = {
-  apiBase: "voice_clone_api_base",
-  corsProxyKey: "voice_clone_corsproxy_key",
   language: "voice_clone_language",
   model: "voice_clone_model",
 };
@@ -37,27 +35,13 @@ LANGUAGE_OPTIONS.forEach(option => {
 const TRANSPORT = window.YoudaoVoiceCloneTransport;
 if (!TRANSPORT) throw new Error("YoudaoVoiceCloneTransport 未加载");
 
-function getQueryApiBase() {
-  try {
-    return TRANSPORT.normalizeBaseUrl(new URLSearchParams(window.location.search).get("apiBase"));
-  } catch {
-    return "";
-  }
-}
-
 function getDefaultApiBase() {
-  const queryBase = getQueryApiBase();
-  if (queryBase && !TRANSPORT.isOfficialYoudaoOrigin(queryBase)) return queryBase;
-  if (window.location.protocol === "file:") return "http://localhost:5001";
-  const saved = TRANSPORT.normalizeBaseUrl(localStorage.getItem(STORAGE_KEYS.apiBase));
-  if (saved && !TRANSPORT.isOfficialYoudaoOrigin(saved)) return saved;
-  return "";
-}
-
-function getDefaultCorsProxyKey() {
-  const queryKey = new URLSearchParams(window.location.search).get("corsProxyKey");
-  if (queryKey) return String(queryKey).trim();
-  return String(localStorage.getItem(STORAGE_KEYS.corsProxyKey) || "").trim();
+  return TRANSPORT.resolveBackendBase({
+    queryBase: new URLSearchParams(window.location.search).get("apiBase"),
+    locationProtocol: window.location.protocol,
+    locationHostname: window.location.hostname,
+    locationOrigin: window.location.origin,
+  });
 }
 
 function getLanguageOption(code) {
@@ -97,7 +81,6 @@ function csvEscape(value) {
 async function requestJson(path, options = {}, label = "请求") {
   const url = TRANSPORT.buildRequestUrl({
     backendBase: API_BASE,
-    corsProxyKey: CORS_PROXY_KEY,
     path,
   });
   const response = await fetch(url, options);
@@ -105,18 +88,17 @@ async function requestJson(path, options = {}, label = "请求") {
   const contentType = response.headers.get("content-type") || "";
   if (!contentType.includes("application/json")) {
     const snippet = raw.replace(/\s+/g, " ").slice(0, 120);
-    throw new Error(`${label} 返回了 HTML 内容，通常是后端地址不对。当前地址：${API_BASE || "CorsProxy"}。响应片段：${snippet}`);
+    throw new Error(`${label} 返回了 HTML 内容，通常是后端地址不对。当前地址：${API_BASE}。响应片段：${snippet}`);
   }
   try {
     return JSON.parse(raw);
   } catch {
     const snippet = raw.replace(/\s+/g, " ").slice(0, 120);
-    throw new Error(`${label} 返回了无法解析的 JSON。当前地址：${API_BASE || "CorsProxy"}。响应片段：${snippet}`);
+    throw new Error(`${label} 返回了无法解析的 JSON。当前地址：${API_BASE}。响应片段：${snippet}`);
   }
 }
 
 let API_BASE = getDefaultApiBase();
-let CORS_PROXY_KEY = getDefaultCorsProxyKey();
 let selectedLanguage = normalizeLanguage(localStorage.getItem(STORAGE_KEYS.language) || "zh-CHS");
 let selectedModel = MODEL_OPTIONS[localStorage.getItem(STORAGE_KEYS.model)] ? localStorage.getItem(STORAGE_KEYS.model) : "pro";
 let voiceId = null;
@@ -161,53 +143,6 @@ function checkCredentials() {
     return null;
   }
   return { appKey, appSecret };
-}
-
-function updateApiHint() {
-  const hint = $("api-base-hint");
-  if (!hint) return;
-  if (API_BASE) {
-    hint.textContent = `当前后端地址：${API_BASE}`;
-    return;
-  }
-  if (CORS_PROXY_KEY) {
-    hint.textContent = "当前使用 CorsProxy API Key 直连有道接口。";
-    return;
-  }
-  hint.textContent = "请填写你自己的后端地址，或填入 CorsProxy API Key。不要填写 openapi.youdao.com。";
-}
-
-function saveApiBase(value) {
-  const input = $("api-base");
-  const next = TRANSPORT.normalizeBaseUrl(typeof value === "string" ? value : input ? input.value : "");
-  if (next && TRANSPORT.isOfficialYoudaoOrigin(next)) {
-    showMsg("后端地址不能填写 openapi.youdao.com。请填你自己部署的后端，或改用 CorsProxy API Key。");
-    if (input) input.value = API_BASE;
-    return;
-  }
-  API_BASE = next;
-  if (API_BASE) {
-    localStorage.setItem(STORAGE_KEYS.apiBase, API_BASE);
-  } else {
-    localStorage.removeItem(STORAGE_KEYS.apiBase);
-  }
-  if (input) input.value = API_BASE || "";
-  updateApiHint();
-  showMsg("后端地址已保存", "success");
-}
-
-function saveCorsProxyKey(value) {
-  const input = $("cors-proxy-key");
-  const next = String(typeof value === "string" ? value : input ? input.value : "").trim();
-  CORS_PROXY_KEY = next;
-  if (CORS_PROXY_KEY) {
-    localStorage.setItem(STORAGE_KEYS.corsProxyKey, CORS_PROXY_KEY);
-  } else {
-    localStorage.removeItem(STORAGE_KEYS.corsProxyKey);
-  }
-  if (input) input.value = CORS_PROXY_KEY;
-  updateApiHint();
-  showMsg("CorsProxy API Key 已保存", "success");
 }
 
 function updateLanguageUI() {
@@ -571,7 +506,6 @@ function renderResults(data) {
     const url = item.mediaUrl || "";
     const proxiedUrl = TRANSPORT.buildMediaUrl({
       backendBase: API_BASE,
-      corsProxyKey: CORS_PROXY_KEY,
       mediaUrl: url,
       filename: `audio_${displayIndex}.wav`,
     });
@@ -592,26 +526,6 @@ function renderResults(data) {
 
 function initApp() {
   renderLanguageOptions();
-
-  const apiInput = $("api-base");
-  if (apiInput) {
-    apiInput.value = API_BASE;
-    apiInput.addEventListener("change", () => saveApiBase(apiInput.value));
-  }
-
-  const corsKeyInput = $("cors-proxy-key");
-  if (corsKeyInput) {
-    corsKeyInput.value = CORS_PROXY_KEY;
-    corsKeyInput.addEventListener("change", () => saveCorsProxyKey(corsKeyInput.value));
-  }
-
-  if (!API_BASE) {
-    if (CORS_PROXY_KEY) {
-      showMsg("已启用 CorsProxy API Key，页面会直连有道接口。");
-    } else {
-      showMsg("请先填写后端地址，或填写 CorsProxy API Key。不要把 openapi.youdao.com 当成后端地址。");
-    }
-  }
 
   const languageSelect = $("language-select");
   if (languageSelect) {
