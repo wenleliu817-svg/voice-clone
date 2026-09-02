@@ -50,11 +50,11 @@
       </div>
     </section>
 
-    <!-- Step 2: Voice Clone -->
+    <!-- Step 2: Reference Audio -->
     <section class="card">
       <div class="card-header">
         <span class="step-badge">2</span>
-        <h2>音色克隆</h2>
+        <h2>参考音频</h2>
       </div>
       <div class="upload-zone" id="audio-dropzone">
         <i class="fa-solid fa-cloud-arrow-up"></i>
@@ -68,9 +68,6 @@
           <span id="audio-filename" class="filename"></span>
           <button class="btn-icon" onclick="clearAudio()" title="移除"><i class="fa-solid fa-xmark"></i></button>
         </div>
-        <button class="btn btn-primary" id="btn-clone" onclick="cloneVoice()">
-          <i class="fa-solid fa-fingerprint"></i> 克隆音色
-        </button>
       </div>
       <div class="form-row settings">
         <div class="form-group">
@@ -87,60 +84,18 @@
           <div class="field-hint" id="model-hint"></div>
         </div>
       </div>
-      <div id="voice-id-display" class="result-tag hidden"></div>
     </section>
 
-    <!-- Step 3: Text & Emotion -->
+    <!-- Step 3: Text -->
     <section class="card">
       <div class="card-header">
         <span class="step-badge">3</span>
-        <h2>合成内容</h2>
-        <div class="tab-switch">
-          <button class="tab-btn active" onclick="switchTab('excel')" id="tab-excel">Excel 导入</button>
-          <button class="tab-btn" onclick="switchTab('manual')" id="tab-manual">手动输入</button>
-        </div>
+        <h2>合成文本</h2>
       </div>
-
-      <!-- Excel Tab -->
-      <div id="panel-excel" class="tab-panel">
-        <div class="upload-zone" id="excel-dropzone">
-          <i class="fa-solid fa-file-excel"></i>
-          <p>拖拽 Excel 文件到此处，或 <span class="link" onclick="document.getElementById('excelFile').click()">点击选择</span></p>
-          <input type="file" id="excelFile" accept=".xlsx,.xls" hidden>
-          <p class="hint">要求包含「文本」列，可选「语种」和「情绪」列</p>
-        </div>
-        <div class="actions">
-          <button class="btn btn-outline" onclick="downloadTemplate()">
-            <i class="fa-solid fa-download"></i> 下载 Excel 模板
-          </button>
-        </div>
-        <div id="excel-preview" class="preview-table-wrapper hidden">
-          <table class="preview-table">
-            <thead><tr><th>#</th><th>文本</th><th>语种</th><th>情绪</th></tr></thead>
-            <tbody id="excel-tbody"></tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- Manual Tab -->
-      <div id="panel-manual" class="tab-panel hidden">
-        <div id="manual-rows">
-          <div class="manual-row">
-            <input type="text" class="input-text" placeholder="输入要合成的文本">
-            <select class="input-emotion">
-              <option value="">自然</option>
-              <option value="开心">开心</option>
-              <option value="悲伤">悲伤</option>
-              <option value="愤怒">愤怒</option>
-              <option value="恐惧">恐惧</option>
-              <option value="厌恶">厌恶</option>
-              <option value="惊讶">惊讶</option>
-            </select>
-          </div>
-        </div>
-        <button class="btn btn-outline" onclick="addManualRow()">
-          <i class="fa-solid fa-plus"></i> 添加一行
-        </button>
+      <div class="form-group">
+        <label>文本</label>
+        <textarea id="composeText" class="input-area" rows="6" placeholder="输入要合成的文本，支持多行"></textarea>
+        <div class="field-hint">可输入单行或多行文本，后端会按行生成结果。</div>
       </div>
     </section>
 
@@ -165,7 +120,7 @@
         </div>
       </div>
       <button class="btn btn-primary btn-large" id="btn-synthesize" onclick="startSynthesis()">
-        <i class="fa-solid fa-wand-magic-sparkles"></i> 开始合成
+        <i class="fa-solid fa-wand-magic-sparkles"></i> 一键生成
       </button>
     </section>
 
@@ -183,7 +138,7 @@
         <h2><i class="fa-solid fa-rocket"></i> 部署说明</h2>
       </div>
       <p class="deploy-text">
-        本页面默认连接内置后端，再由后端转发到有道 API。<br><br>
+        本页面默认连接内置后端，点击一次就会自动完成参考音频克隆和文本合成。<br><br>
         如需更换后端，可在网址后加上 <code>?apiBase=你的后端地址</code>。
       </p>
       <div class="deploy-btns">
@@ -198,7 +153,7 @@
 
   </div>
 
-  <script src="transport.js?v=20260902-2"></script>
-  <script src="app.js?v=20260902-2"></script>
+  <script src="transport.js?v=20260902-3"></script>
+  <script src="app.js?v=20260902-3"></script>
 </body>
 </html>

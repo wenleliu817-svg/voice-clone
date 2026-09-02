@@ -233,6 +233,7 @@ function clearAudio() {
 
 function setupDrop(id, types, cb) {
   const zone = $(id);
+  if (!zone) return;
   zone.addEventListener("dragover", event => {
     event.preventDefault();
     zone.classList.add("dragover");
@@ -402,107 +403,75 @@ async function handleExcel(file) {
 async function startSynthesis() {
   const cred = checkCredentials();
   if (!cred) return;
-  if (!voiceId) {
-    showMsg("请先完成音色克隆");
+  if (!audioFile) {
+    showMsg("请先上传参考音频");
     return;
   }
 
-  const activeTab = $("tab-excel").classList.contains("active") ? "excel" : "manual";
-  const items = activeTab === "excel" ? synthesisItems : getManualItems();
-  if (!items.length) {
-    showMsg("请先导入文本或手动输入");
+  const textInput = $("composeText");
+  const text = textInput ? textInput.value.trim() : "";
+  if (!text) {
+    showMsg("请先输入要合成的文本");
     return;
   }
 
-  const normalizedItems = items.map(item => ({
-    ...item,
-    language: normalizeLanguage(item.language || selectedLanguage),
+  if (selectedModel === "lite" && !isLiteCompatible(selectedLanguage)) {
+    showMsg("lite 仅支持中文/英文，请切换到 pro");
+    return;
+  }
+
+  const items = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  synthesisItems = items.map(line => ({
+    text: line,
+    emotion: "",
+    language: selectedLanguage,
   }));
-
-  if (selectedModel === "lite") {
-    const unsupported = normalizedItems.find(item => !isLiteCompatible(item.language));
-    if (unsupported) {
-      showMsg(`lite 仅支持中文/英文，${getLanguageLabel(unsupported.language)} 请切换到 pro`);
-      return;
-    }
-  }
-
-  synthesisItems = normalizedItems;
   show($("overlay"));
-  currentTaskId = null;
+  const synthBtn = $("btn-synthesize");
+  if (synthBtn) synthBtn.disabled = true;
 
   try {
-    const payload = await requestJson("/api/synthesize", {
+    const formData = new FormData();
+    formData.append("appKey", cred.appKey);
+    formData.append("appSecret", cred.appSecret);
+    formData.append("text", text);
+    formData.append("language", selectedLanguage);
+    formData.append("model", selectedModel);
+    formData.append("format", $("format").value);
+    formData.append("speed", String($("speed").value));
+    formData.append("volume", String($("volume").value));
+    formData.append("audio", audioFile, audioFile.name);
+    const payload = await requestJson("/api/compose", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        appKey: cred.appKey,
-        appSecret: cred.appSecret,
-        voiceId,
-        model: selectedModel,
-        language: selectedLanguage,
-        items: normalizedItems,
-        format: $("format").value,
-        speed: parseFloat($("speed").value),
-        volume: parseFloat($("volume").value),
-      }),
-    }, "合成提交");
+      body: formData,
+    }, "一键生成");
     if (String(payload.code) !== "0") {
-      hide($("overlay"));
-      showMsg("提交失败: " + (payload.message || JSON.stringify(payload)));
+      showMsg("生成失败: " + (payload.message || JSON.stringify(payload)));
       return;
     }
-    currentTaskId = payload.data.taskId;
-    pollProgress(cred.appKey, cred.appSecret);
-  } catch (error) {
-    hide($("overlay"));
-    showMsg("提交出错: " + error.message);
-  }
-}
-
-async function pollProgress(appKey, appSecret) {
-  while (true) {
-    await new Promise(resolve => setTimeout(resolve, 3000));
-    try {
-      const payload = await requestJson(`/api/progress/${currentTaskId}?appKey=${encodeURIComponent(appKey)}&appSecret=${encodeURIComponent(appSecret)}`, {}, "进度查询");
-      if (String(payload.code) !== "0") continue;
-      const data = payload.data || {};
-      const status = data.status || "UNKNOWN";
-      const total = data.totalCount || 0;
-      const success = data.successCount || 0;
-      $("progress-status").textContent = status === "SUCCESS" ? "合成完成" : status;
-      $("progress-count").textContent = `${success} / ${total}`;
-      if (status === "SUCCESS" || status === "PARTIAL_SUCCESS") {
-        hide($("overlay"));
-        await fetchResults(appKey, appSecret);
-        break;
-      }
-    } catch {
-      // keep polling
-    }
-  }
-}
-
-async function fetchResults(appKey, appSecret) {
-  try {
-    const payload = await requestJson(`/api/results/${currentTaskId}?appKey=${encodeURIComponent(appKey)}&appSecret=${encodeURIComponent(appSecret)}`, {}, "结果查询");
-    if (String(payload.code) !== "0") {
-      showMsg("获取结果失败: " + (payload.message || "未知错误"));
-      return;
-    }
-    renderResults(payload.data || []);
+    const results = Array.isArray(payload.data?.results) ? payload.data.results : [];
+    renderResults(results);
     show($("results-card"));
+    showMsg("生成成功！", "success");
   } catch (error) {
-    showMsg("获取结果出错: " + error.message);
+    showMsg("生成出错: " + error.message);
+  } finally {
+    hide($("overlay"));
+    if (synthBtn) synthBtn.disabled = false;
   }
 }
 
 function renderResults(data) {
   const list = $("results-list");
   list.innerHTML = "";
-  data.forEach((item, index) => {
+  const items = Array.isArray(data) ? data : [];
+  if (!items.length) {
+    list.innerHTML = '<div class="empty-state">没有返回可播放的结果</div>';
+    return;
+  }
+  items.forEach((item, index) => {
     const displayIndex = typeof item.qIndex === "number" ? item.qIndex + 1 : index + 1;
-    const itemData = synthesisItems[displayIndex - 1] || { text: "", emotion: "自然", language: selectedLanguage };
+    const itemData = synthesisItems[displayIndex - 1] || { text: "", language: selectedLanguage };
     const url = item.mediaUrl || "";
     const proxiedUrl = TRANSPORT.buildMediaUrl({
       backendBase: API_BASE,
@@ -515,7 +484,6 @@ function renderResults(data) {
       <span class="idx">#${displayIndex}</span>
       <span class="text" title="${escapeHtml(itemData.text)}">${escapeHtml(itemData.text)}</span>
       <span class="lang">${escapeHtml(getLanguageLabel(itemData.language || selectedLanguage))}</span>
-      <span class="emot">${escapeHtml(itemData.emotion || "自然")}</span>
       ${url ? `<span class="status ok"><i class="fa-solid fa-check"></i></span>` : `<span class="status error">失败</span>`}
       ${url ? `<audio controls src="${proxiedUrl}"></audio>` : ""}
       ${url ? `<a href="${proxiedUrl}" target="_blank" download><i class="fa-solid fa-download"></i> 下载</a>` : ""}
@@ -541,20 +509,10 @@ function initApp() {
 
   const audioInput = $("audioFile");
   if (audioInput) audioInput.addEventListener("change", event => handleAudio(event.target.files[0]));
-  const excelInput = $("excelFile");
-  if (excelInput) excelInput.addEventListener("change", event => handleExcel(event.target.files[0]));
 
   setupDrop("audio-dropzone", [".wav", "audio/wav"], file => handleAudio(file));
-  setupDrop("excel-dropzone", [".xlsx", ".xls"], file => handleExcel(file));
-
-  updateApiHint();
   updateModelUI();
   updateLanguageUI();
-  updateManualPlaceholders();
-
-  if ($("tab-excel")) $("tab-excel").classList.add("active");
-  if ($("panel-excel")) show($("panel-excel"));
-  if ($("panel-manual")) hide($("panel-manual"));
 }
 
 initApp();

@@ -42,6 +42,8 @@ LANGUAGE_LOOKUP.update({v.lower(): k for k, v in LANGUAGE_OPTIONS.items()})
 LANGUAGE_LOOKUP.update({"cn": "zh-CHS", "zh": "zh-CHS", "zh-cn": "zh-CHS", "chinese": "zh-CHS", "english": "en", "en-us": "en"})
 
 MODEL_OPTIONS = {"lite", "pro"}
+DEFAULT_COMPOSE_TIMEOUT_SECONDS = 300
+DEFAULT_COMPOSE_POLL_INTERVAL_SECONDS = 3
 
 UPLOAD_DIR = Path(__file__).parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -114,6 +116,128 @@ def api_multipart_post(uri, fields, files):
     return request_json(req, timeout=120)
 
 
+def build_text_items(text, language):
+    raw = str(text or "").splitlines()
+    items = []
+    for line in raw:
+        value = line.strip()
+        if value:
+            items.append({
+                "text": value,
+                "emotion": "",
+                "language": normalize_language(language),
+            })
+    if items:
+        return items
+    value = str(text or "").strip()
+    if not value:
+        return []
+    return [{
+        "text": value,
+        "emotion": "",
+        "language": normalize_language(language),
+    }]
+
+
+def upload_voice_clone(app_key, app_secret, voice_name, model, sample_rate, channel, audio, emotion_audio=None):
+    salt, curtime, sign = generate_sign_v4(app_key, app_secret)
+    fields = {
+        "appKey": app_key,
+        "curtime": curtime,
+        "salt": salt,
+        "sign": sign,
+        "signType": "v4",
+        "name": voice_name[:50],
+        "model": model,
+        "sampleRate": sample_rate,
+        "channel": channel,
+    }
+    files = {"audioFile": (secure_filename(audio.filename), audio.read())}
+    if emotion_audio:
+        files["emotionAudioFile"] = (secure_filename(emotion_audio.filename), emotion_audio.read())
+    return api_multipart_post(URI_UPLOAD, fields, files)
+
+
+def submit_synthesis(app_key, app_secret, voice_id, model, items, audio_format, volume=None, speed=None, sample_rate="16000", channel="1"):
+    normalized_items = []
+    for item in items:
+        language = normalize_language(item.get("language"))
+        if model == "lite" and language and not is_lite_language(language):
+            return {"error": f"lite model only supports 中文/英文, but found {language_label(language)}"}
+        normalized_items.append({
+            "text": str(item.get("text", "")).strip(),
+            "emotion": str(item.get("emotion", "")).strip(),
+            "language": language,
+        })
+
+    if not normalized_items:
+        return {"error": "No items to synthesize"}
+
+    salt, curtime, sign = generate_sign_v4(app_key, app_secret)
+    q_list = []
+    for item in normalized_items:
+        d = {"q": item["text"]}
+        if item.get("emotion"):
+            d["emotionReferText"] = item["emotion"]
+        q_list.append(d)
+
+    payload = {
+        "appKey": app_key,
+        "curtime": curtime,
+        "salt": salt,
+        "sign": sign,
+        "signType": "v4",
+        "voiceId": voice_id,
+        "format": audio_format,
+        "sampleRate": sample_rate,
+        "channel": channel,
+        "qList": q_list,
+    }
+    if volume is not None:
+        payload["volume"] = str(volume)
+    if speed is not None:
+        payload["speed"] = str(speed)
+    return api_json_post(URI_SUBMIT, payload)
+
+
+def wait_for_task_completion(app_key, app_secret, task_id, timeout_seconds=DEFAULT_COMPOSE_TIMEOUT_SECONDS, poll_interval_seconds=DEFAULT_COMPOSE_POLL_INTERVAL_SECONDS):
+    deadline = time.time() + max(1, int(timeout_seconds))
+    last_progress = None
+
+    while time.time() < deadline:
+        salt, curtime, sign = generate_sign_v4(app_key, app_secret)
+        payload = {
+            "appKey": app_key,
+            "curtime": curtime,
+            "salt": salt,
+            "sign": sign,
+            "signType": "v4",
+            "taskId": task_id,
+        }
+        progress_result = api_json_post(URI_PROGRESS, payload)
+        last_progress = progress_result
+        if str(progress_result.get("code")) == "0":
+            data = progress_result.get("data") or {}
+            status = str(data.get("status") or "").upper()
+            if status in {"SUCCESS", "PARTIAL_SUCCESS"}:
+                result_payload = api_json_post(URI_RESULT, payload)
+                if str(result_payload.get("code")) == "0":
+                    return {
+                        "code": "0",
+                        "data": result_payload.get("data", []),
+                        "progress": data,
+                    }
+                return result_payload
+
+        time.sleep(max(1, int(poll_interval_seconds)))
+
+    return {
+        "code": "timeout",
+        "message": "Compose request timed out",
+        "progress": last_progress,
+    }
+
+
 # --- API: Health ---
 @app.route("/api/status", methods=["GET"])
 def status():
@@ -154,6 +278,95 @@ def clone_voice():
         files["emotionAudioFile"] = (secure_filename(emotion_audio.filename), emotion_audio.read())
     result = api_multipart_post(URI_UPLOAD, fields, files)
     return jsonify(result)
+
+
+@app.route("/api/compose", methods=["POST"])
+def compose():
+    app_key = request.form.get("appKey", "").strip()
+    app_secret = request.form.get("appSecret", "").strip()
+    text = request.form.get("text", "").strip()
+    language = request.form.get("language", "zh-CHS").strip()
+    model = request.form.get("model", "pro").strip() or "pro"
+    voice_name = request.form.get("voiceName", "OneShot").strip() or "OneShot"
+    audio_format = request.form.get("format", "wav").strip() or "wav"
+    volume = request.form.get("volume")
+    speed = request.form.get("speed")
+    sample_rate = request.form.get("sampleRate", "16000").strip() or "16000"
+    channel = request.form.get("channel", "1").strip() or "1"
+    wait_seconds = request.form.get("waitSeconds", str(DEFAULT_COMPOSE_TIMEOUT_SECONDS)).strip() or str(DEFAULT_COMPOSE_TIMEOUT_SECONDS)
+    poll_interval_seconds = request.form.get("pollIntervalSeconds", str(DEFAULT_COMPOSE_POLL_INTERVAL_SECONDS)).strip() or str(DEFAULT_COMPOSE_POLL_INTERVAL_SECONDS)
+    audio = request.files.get("audio")
+
+    if not app_key or not app_secret:
+        return jsonify({"error": "Missing appKey or appSecret"}), 400
+    if not text:
+        return jsonify({"error": "Missing text"}), 400
+    if not audio:
+        return jsonify({"error": "Missing audio file"}), 400
+    if model not in MODEL_OPTIONS:
+        return jsonify({"error": "Invalid model"}), 400
+
+    clone_result = upload_voice_clone(
+        app_key=app_key,
+        app_secret=app_secret,
+        voice_name=voice_name,
+        model=model,
+        sample_rate=sample_rate,
+        channel=channel,
+        audio=audio,
+    )
+    if str(clone_result.get("code")) != "0":
+        return jsonify(clone_result)
+
+    voice_id = (((clone_result.get("data") or {}).get("voiceId")) or "").strip()
+    if not voice_id:
+        return jsonify({"code": "missing_voice_id", "message": "Clone response missing voiceId", "raw": clone_result}), 500
+
+    items = build_text_items(text, language)
+    if not items:
+        return jsonify({"error": "Missing text"}), 400
+
+    synth_result = submit_synthesis(
+        app_key=app_key,
+        app_secret=app_secret,
+        voice_id=voice_id,
+        model=model,
+        items=items,
+        audio_format=audio_format,
+        volume=volume,
+        speed=speed,
+        sample_rate=sample_rate,
+        channel=channel,
+    )
+    if synth_result.get("error"):
+        return jsonify(synth_result), 400
+    if str(synth_result.get("code")) != "0":
+        return jsonify(synth_result)
+
+    task_id = (((synth_result.get("data") or {}).get("taskId")) or "").strip()
+    if not task_id:
+        return jsonify({"code": "missing_task_id", "message": "Synthesis response missing taskId", "raw": synth_result}), 500
+
+    completion = wait_for_task_completion(
+        app_key=app_key,
+        app_secret=app_secret,
+        task_id=task_id,
+        timeout_seconds=int(wait_seconds),
+        poll_interval_seconds=int(poll_interval_seconds),
+    )
+    if str(completion.get("code")) != "0":
+        status_code = 504 if completion.get("code") == "timeout" else 500
+        return jsonify(completion), status_code
+
+    return jsonify({
+        "code": "0",
+        "data": {
+          "voiceId": voice_id,
+          "taskId": task_id,
+          "results": completion.get("data", []),
+          "progress": completion.get("progress", {}),
+        }
+    })
 
 
 # --- API: Parse Excel ---
