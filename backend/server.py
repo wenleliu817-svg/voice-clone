@@ -17,6 +17,7 @@ import pandas as pd
 # --- Config ---
 BASE_URL = "https://openapi.youdao.com"
 URI_UPLOAD = "/tts_gateway/v2/upload"
+URI_SYNTHESIS = "/tts_gateway/v2/synthesis"
 URI_SUBMIT = "/tts_gateway/v2/synthesis_async"
 URI_PROGRESS = "/tts_gateway/v2/get_progress"
 URI_RESULT = "/tts_gateway/v2/get_result"
@@ -47,6 +48,8 @@ DEFAULT_COMPOSE_POLL_INTERVAL_SECONDS = 3
 
 UPLOAD_DIR = Path(__file__).parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
+GENERATED_DIR = UPLOAD_DIR / "generated"
+GENERATED_DIR.mkdir(exist_ok=True)
 
 app = Flask(__name__)
 CORS(app)
@@ -101,6 +104,30 @@ def api_json_post(uri, payload):
     return request_json(req, timeout=120)
 
 
+def api_audio_post(uri, payload):
+    body = json.dumps(payload).encode("utf-8")
+    req = Request(BASE_URL + uri, data=body, method="POST")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urlopen(req, timeout=120) as resp:
+            content_type = (resp.headers.get("Content-Type") or "audio/wav").split(";")[0].strip()
+            data = resp.read()
+            if content_type.startswith("audio/"):
+                return {"content_type": content_type, "data": data}
+            try:
+                return json.loads(data.decode("utf-8"))
+            except Exception:
+                return {"code": "bad_response", "message": "Unexpected non-audio response", "content_type": content_type}
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        try:
+            return json.loads(body)
+        except Exception:
+            return {"code": str(exc.code), "message": body or str(exc)}
+    except URLError as exc:
+        return {"code": "network_error", "message": str(exc)}
+
+
 def api_multipart_post(uri, fields, files):
     boundary = uuid.uuid4().hex
     body = b""
@@ -114,6 +141,15 @@ def api_multipart_post(uri, fields, files):
     req = Request(BASE_URL + uri, data=body, method="POST")
     req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
     return request_json(req, timeout=120)
+
+
+def save_generated_audio(data, content_type, index):
+    ext = "mp3" if "mp3" in content_type else "wav"
+    token = f"{int(time.time())}_{index}_{uuid.uuid4().hex[:10]}"
+    filename = f"{token}.{ext}"
+    path = GENERATED_DIR / filename
+    path.write_bytes(data)
+    return filename, f"/api/generated/{filename}"
 
 
 def build_text_items(text, language):
@@ -326,45 +362,46 @@ def compose():
     if not items:
         return jsonify({"error": "Missing text"}), 400
 
-    synth_result = submit_synthesis(
-        app_key=app_key,
-        app_secret=app_secret,
-        voice_id=voice_id,
-        model=model,
-        items=items,
-        audio_format=audio_format,
-        volume=volume,
-        speed=speed,
-        sample_rate=sample_rate,
-        channel=channel,
-    )
-    if synth_result.get("error"):
-        return jsonify(synth_result), 400
-    if str(synth_result.get("code")) != "0":
-        return jsonify(synth_result)
+    results = []
+    for index, item in enumerate(items):
+        salt, curtime, sign = generate_sign_v4(app_key, app_secret)
+        synth_payload = {
+            "appKey": app_key,
+            "curtime": curtime,
+            "salt": salt,
+            "sign": sign,
+            "signType": "v4",
+            "voiceId": voice_id,
+            "format": audio_format,
+            "sampleRate": sample_rate,
+            "channel": channel,
+            "q": item["text"],
+        }
+        if volume is not None:
+            synth_payload["volume"] = str(volume)
+        if speed is not None:
+            synth_payload["speed"] = str(speed)
+        audio_result = api_audio_post(URI_SYNTHESIS, synth_payload)
+        if audio_result.get("error"):
+            return jsonify(audio_result), 400
+        if str(audio_result.get("code", "0")) != "0" and "data" not in audio_result:
+            return jsonify(audio_result), 500
+        if "data" in audio_result and not isinstance(audio_result.get("data"), (bytes, bytearray)):
+            return jsonify(audio_result), 500
 
-    task_id = (((synth_result.get("data") or {}).get("taskId")) or "").strip()
-    if not task_id:
-        return jsonify({"code": "missing_task_id", "message": "Synthesis response missing taskId", "raw": synth_result}), 500
-
-    completion = wait_for_task_completion(
-        app_key=app_key,
-        app_secret=app_secret,
-        task_id=task_id,
-        timeout_seconds=int(wait_seconds),
-        poll_interval_seconds=int(poll_interval_seconds),
-    )
-    if str(completion.get("code")) != "0":
-        status_code = 504 if completion.get("code") == "timeout" else 500
-        return jsonify(completion), status_code
+        filename, media_url = save_generated_audio(audio_result["data"], audio_result["content_type"], index)
+        results.append({
+            "qIndex": index,
+            "filename": filename,
+            "mediaUrl": media_url,
+            "contentType": audio_result["content_type"],
+        })
 
     return jsonify({
         "code": "0",
         "data": {
-          "voiceId": voice_id,
-          "taskId": task_id,
-          "results": completion.get("data", []),
-          "progress": completion.get("progress", {}),
+            "voiceId": voice_id,
+            "results": results,
         }
     })
 
@@ -525,6 +562,17 @@ def download_audio():
             return send_file(BytesIO(data), mimetype=mime, as_attachment=True, download_name=filename)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/generated/<path:filename>", methods=["GET"])
+def generated_audio(filename):
+    safe_name = Path(filename).name
+    path = GENERATED_DIR / safe_name
+    if not path.is_file():
+        return jsonify({"error": "File not found"}), 404
+    ext = path.suffix.lower()
+    mimetype = "audio/mpeg" if ext == ".mp3" else "audio/wav"
+    return send_file(path, mimetype=mimetype, as_attachment=False)
 
 
 # --- API: Download all as ZIP ---

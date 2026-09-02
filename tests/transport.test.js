@@ -72,6 +72,15 @@ function run() {
 
   assert.strictEqual(
     buildMediaUrl({
+      backendBase: "https://api.example.com",
+      mediaUrl: "/api/generated/sample.wav",
+      filename: "audio_1.wav",
+    }),
+    "https://api.example.com/api/generated/sample.wav"
+  );
+
+  assert.strictEqual(
+    buildMediaUrl({
       backendBase: "",
       mediaUrl: "https://cdn.example.com/audio.wav",
       filename: "audio_1.wav",

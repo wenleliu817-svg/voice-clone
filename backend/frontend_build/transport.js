@@ -42,6 +42,9 @@ function buildMediaUrl({ backendBase, mediaUrl, filename = "audio.wav" }) {
   const url = String(mediaUrl || "").trim();
   if (!url) return "";
   const base = normalizeBaseUrl(backendBase);
+  if (url.startsWith("/")) {
+    return base ? `${base}${url}` : url;
+  }
   if (base) {
     return `${base}/api/download?url=${encodeURIComponent(url)}&filename=${encodeURIComponent(filename)}`;
   }
