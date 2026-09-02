@@ -21,6 +21,28 @@ URI_SUBMIT = "/tts_gateway/v2/synthesis_async"
 URI_PROGRESS = "/tts_gateway/v2/get_progress"
 URI_RESULT = "/tts_gateway/v2/get_result"
 
+LANGUAGE_OPTIONS = {
+    "zh-CHS": "中文",
+    "en": "英文",
+    "de": "德语",
+    "fr": "法语",
+    "ja": "日语",
+    "ko": "韩语",
+    "id": "印尼语",
+    "vi": "越南语",
+    "th": "泰语",
+    "ru": "俄语",
+    "it": "意大利语",
+    "pt": "葡萄牙语",
+    "es": "西班牙语",
+    "ms": "马来语",
+}
+LANGUAGE_LOOKUP = {k.lower(): k for k in LANGUAGE_OPTIONS}
+LANGUAGE_LOOKUP.update({v.lower(): k for k, v in LANGUAGE_OPTIONS.items()})
+LANGUAGE_LOOKUP.update({"cn": "zh-CHS", "zh": "zh-CHS", "zh-cn": "zh-CHS", "chinese": "zh-CHS", "english": "en", "en-us": "en"})
+
+MODEL_OPTIONS = {"lite", "pro"}
+
 UPLOAD_DIR = Path(__file__).parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
@@ -36,12 +58,45 @@ def generate_sign_v4(app_key, app_secret):
     return salt, curtime, sign
 
 
+def normalize_language(value):
+    key = str(value or "").strip().lower()
+    if not key:
+        return ""
+    return LANGUAGE_LOOKUP.get(key, "")
+
+
+def language_label(value):
+    code = normalize_language(value)
+    return LANGUAGE_OPTIONS.get(code, code or "未知语种")
+
+
+def is_lite_language(code):
+    return normalize_language(code) in {"zh-CHS", "en"}
+
+
+def read_json_response(resp):
+    return json.loads(resp.read().decode("utf-8"))
+
+
+def request_json(req, timeout=120):
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            return read_json_response(resp)
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        try:
+            return json.loads(body)
+        except Exception:
+            return {"code": str(exc.code), "message": body or str(exc)}
+    except URLError as exc:
+        return {"code": "network_error", "message": str(exc)}
+
+
 def api_json_post(uri, payload):
     body = json.dumps(payload).encode("utf-8")
     req = Request(BASE_URL + uri, data=body, method="POST")
     req.add_header("Content-Type", "application/json")
-    with urlopen(req, timeout=120) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    return request_json(req, timeout=120)
 
 
 def api_multipart_post(uri, fields, files):
@@ -56,8 +111,7 @@ def api_multipart_post(uri, fields, files):
     body += f"--{boundary}--\r\n".encode()
     req = Request(BASE_URL + uri, data=body, method="POST")
     req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
-    with urlopen(req, timeout=120) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    return request_json(req, timeout=120)
 
 
 # --- API: Health ---
@@ -80,6 +134,7 @@ def clone_voice():
     if not audio:
         return jsonify({"error": "Missing audio file"}), 400
 
+    emotion_audio = request.files.get("emotionAudioFile")
     salt, curtime, sign = generate_sign_v4(app_key, app_secret)
     fields = {
         "appKey": app_key,
@@ -91,6 +146,8 @@ def clone_voice():
         "model": model,
     }
     files = {"audioFile": (secure_filename(audio.filename), audio.read())}
+    if emotion_audio:
+        files["emotionAudioFile"] = (secure_filename(emotion_audio.filename), emotion_audio.read())
     result = api_multipart_post(URI_UPLOAD, fields, files)
     return jsonify(result)
 
@@ -103,17 +160,17 @@ def parse_excel():
         return jsonify({"error": "Missing excel file"}), 400
     try:
         df = pd.read_excel(excel_file.stream)
-        required = {"文本", "情绪"}
-        headers = {str(c).strip() for c in df.columns}
-        # Allow flexible column names
         text_col = None
         emotion_col = None
+        language_col = None
         for c in df.columns:
             cn = str(c).strip()
             if "文本" in cn or "text" in cn.lower():
                 text_col = c
             if "情绪" in cn or "emotion" in cn.lower():
                 emotion_col = c
+            if "语种" in cn or "语言" in cn or "language" in cn.lower() or "lang" in cn.lower():
+                language_col = c
         if text_col is None:
             return jsonify({"error": "Excel must have a '文本' column"}), 400
         items = []
@@ -122,7 +179,8 @@ def parse_excel():
                 continue
             items.append({
                 "text": str(row[text_col]).strip(),
-                "emotion": str(row[emotion_col]).strip() if emotion_col and not pd.isna(row[emotion_col]) else ""
+                "emotion": str(row[emotion_col]).strip() if emotion_col and not pd.isna(row[emotion_col]) else "",
+                "language": normalize_language(row[language_col]) if language_col and not pd.isna(row[language_col]) else "",
             })
         return jsonify({"items": items})
     except Exception as e:
@@ -136,6 +194,7 @@ def synthesize():
     app_key = data.get("appKey", "").strip()
     app_secret = data.get("appSecret", "").strip()
     voice_id = data.get("voiceId", "").strip()
+    model = data.get("model", "pro").strip() or "pro"
     items = data.get("items", [])
     audio_format = data.get("format", "wav")
     volume = data.get("volume")
@@ -147,10 +206,23 @@ def synthesize():
         return jsonify({"error": "Missing voiceId"}), 400
     if not items:
         return jsonify({"error": "No items to synthesize"}), 400
+    if model not in MODEL_OPTIONS:
+        return jsonify({"error": "Invalid model"}), 400
+
+    normalized_items = []
+    for item in items:
+        language = normalize_language(item.get("language") or data.get("language"))
+        if model == "lite" and language and not is_lite_language(language):
+            return jsonify({"error": f"lite model only supports 中文/英文, but found {language_label(language)}"}), 400
+        normalized_items.append({
+            "text": str(item.get("text", "")).strip(),
+            "emotion": str(item.get("emotion", "")).strip(),
+            "language": language,
+        })
 
     salt, curtime, sign = generate_sign_v4(app_key, app_secret)
     q_list = []
-    for item in items:
+    for item in normalized_items:
         d = {"q": item["text"]}
         if item.get("emotion"):
             d["emotionReferText"] = item["emotion"]

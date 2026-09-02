@@ -7,6 +7,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link rel="stylesheet" href="styles.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 
@@ -27,6 +28,16 @@
       <h1><i class="fa-solid fa-microphone-lines"></i> 有道声音克隆</h1>
       <p class="subtitle">上传音色样本 & 批量合成语音</p>
     </header>
+
+    <!-- Backend endpoint -->
+    <div class="api-bar" id="api-bar">
+      <label class="proxy-label"><i class="fa-solid fa-plug"></i> 后端地址</label>
+      <input type="text" id="api-base" placeholder="http://localhost:5001 或 https://your-backend.example.com">
+      <button type="button" class="btn btn-outline btn-small" onclick="saveApiBase()">
+        <i class="fa-solid fa-link"></i> 保存
+      </button>
+      <span class="proxy-hint" id="api-base-hint">页面会通过你的后端转发到有道 API，不再使用公共代理。</span>
+    </div>
 
     <!-- Step 1: Credentials -->
     <section class="card">
@@ -71,6 +82,21 @@
           <i class="fa-solid fa-fingerprint"></i> 克隆音色
         </button>
       </div>
+      <div class="form-row settings">
+        <div class="form-group">
+          <label>语种</label>
+          <select id="language-select"></select>
+          <div class="field-hint" id="language-hint"></div>
+        </div>
+        <div class="form-group">
+          <label>模型</label>
+          <select id="model-select">
+            <option value="lite">lite</option>
+            <option value="pro">pro</option>
+          </select>
+          <div class="field-hint" id="model-hint"></div>
+        </div>
+      </div>
       <div id="voice-id-display" class="result-tag hidden"></div>
     </section>
 
@@ -91,7 +117,7 @@
           <i class="fa-solid fa-file-excel"></i>
           <p>拖拽 Excel 文件到此处，或 <span class="link" onclick="document.getElementById('excelFile').click()">点击选择</span></p>
           <input type="file" id="excelFile" accept=".xlsx,.xls" hidden>
-          <p class="hint">要求包含「文本」和「情绪」两列</p>
+          <p class="hint">要求包含「文本」列，可选「语种」和「情绪」列</p>
         </div>
         <div class="actions">
           <button class="btn btn-outline" onclick="downloadTemplate()">
@@ -100,7 +126,7 @@
         </div>
         <div id="excel-preview" class="preview-table-wrapper hidden">
           <table class="preview-table">
-            <thead><tr><th>#</th><th>文本</th><th>情绪</th></tr></thead>
+            <thead><tr><th>#</th><th>文本</th><th>语种</th><th>情绪</th></tr></thead>
             <tbody id="excel-tbody"></tbody>
           </table>
         </div>
@@ -157,11 +183,27 @@
     <section class="card hidden" id="results-card">
       <div class="card-header">
         <h2><i class="fa-solid fa-music"></i> 合成结果</h2>
-        <button class="btn btn-outline" onclick="downloadAllZip()">
-          <i class="fa-solid fa-file-zipper"></i> 全部下载（ZIP）
-        </button>
       </div>
       <div id="results-list" class="results-list"></div>
+    </section>
+
+    <!-- Deploy note -->
+    <section class="card card-muted">
+      <div class="card-header">
+        <h2><i class="fa-solid fa-rocket"></i> 部署说明</h2>
+      </div>
+      <p class="deploy-text">
+        本页面现在通过你自己的后端转发到有道 API，不再依赖公共 CORS 代理。<br><br>
+        如需在 GitHub Pages 或其它静态站点中使用，请先部署这套后端，再把上方“后端地址”指向它：
+      </p>
+      <div class="deploy-btns">
+        <a href="https://render.com/deploy?repo=https://github.com/wenleliu817-svg/voice-clone" target="_blank" class="btn btn-primary">
+          <i class="fa-solid fa-cloud"></i> 一键部署到 Render
+        </a>
+        <a href="https://github.com/wenleliu817-svg/voice-clone#快速开始" target="_blank" class="btn btn-outline">
+          <i class="fa-brands fa-docker"></i> Docker 部署
+        </a>
+      </div>
     </section>
 
   </div>

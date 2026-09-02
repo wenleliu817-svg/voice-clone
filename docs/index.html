@@ -29,15 +29,14 @@
       <p class="subtitle">上传音色样本 & 批量合成语音</p>
     </header>
 
-    <!-- Proxy toggle bar -->
-    <div class="proxy-bar" id="proxy-bar">
-      <label class="proxy-label"><i class="fa-solid fa-server"></i> API 代理</label>
-      <select id="proxy-select" onchange="setProxy()">
-        <option value="corsproxy">corsproxy.io (默认)</option>
-        <option value="allorigins">allorigins.win</option>
-        <option value="none">不使用代理（需 CORS 插件 / 部署后端）</option>
-      </select>
-      <span class="proxy-hint" id="proxy-hint">通过公共代理转发请求，仅用于测试</span>
+    <!-- Backend endpoint -->
+    <div class="api-bar" id="api-bar">
+      <label class="proxy-label"><i class="fa-solid fa-plug"></i> 后端地址</label>
+      <input type="text" id="api-base" placeholder="http://localhost:5001 或 https://your-backend.example.com">
+      <button type="button" class="btn btn-outline btn-small" onclick="saveApiBase()">
+        <i class="fa-solid fa-link"></i> 保存
+      </button>
+      <span class="proxy-hint" id="api-base-hint">页面会通过你的后端转发到有道 API，不再使用公共代理。</span>
     </div>
 
     <!-- Step 1: Credentials -->
@@ -83,6 +82,21 @@
           <i class="fa-solid fa-fingerprint"></i> 克隆音色
         </button>
       </div>
+      <div class="form-row settings">
+        <div class="form-group">
+          <label>语种</label>
+          <select id="language-select"></select>
+          <div class="field-hint" id="language-hint"></div>
+        </div>
+        <div class="form-group">
+          <label>模型</label>
+          <select id="model-select">
+            <option value="lite">lite</option>
+            <option value="pro">pro</option>
+          </select>
+          <div class="field-hint" id="model-hint"></div>
+        </div>
+      </div>
       <div id="voice-id-display" class="result-tag hidden"></div>
     </section>
 
@@ -103,7 +117,7 @@
           <i class="fa-solid fa-file-excel"></i>
           <p>拖拽 Excel 文件到此处，或 <span class="link" onclick="document.getElementById('excelFile').click()">点击选择</span></p>
           <input type="file" id="excelFile" accept=".xlsx,.xls" hidden>
-          <p class="hint">要求包含「文本」和「情绪」两列</p>
+          <p class="hint">要求包含「文本」列，可选「语种」和「情绪」列</p>
         </div>
         <div class="actions">
           <button class="btn btn-outline" onclick="downloadTemplate()">
@@ -112,7 +126,7 @@
         </div>
         <div id="excel-preview" class="preview-table-wrapper hidden">
           <table class="preview-table">
-            <thead><tr><th>#</th><th>文本</th><th>情绪</th></tr></thead>
+            <thead><tr><th>#</th><th>文本</th><th>语种</th><th>情绪</th></tr></thead>
             <tbody id="excel-tbody"></tbody>
           </table>
         </div>
@@ -179,8 +193,8 @@
         <h2><i class="fa-solid fa-rocket"></i> 部署说明</h2>
       </div>
       <p class="deploy-text">
-        本页面使用公共 CORS 代理转发请求，适合快速体验和测试。<br><br>
-        如需正式使用（更安全、支持 ZIP 打包下载），建议部署自己的后端：
+        本页面现在通过你自己的后端转发到有道 API，不再依赖公共 CORS 代理。<br><br>
+        如需在 GitHub Pages 或其它静态站点中使用，请先部署这套后端，再把上方“后端地址”指向它：
       </p>
       <div class="deploy-btns">
         <a href="https://render.com/deploy?repo=https://github.com/wenleliu817-svg/voice-clone" target="_blank" class="btn btn-primary">

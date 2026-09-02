@@ -1,90 +1,223 @@
-const API_BASE = "https://openapi.youdao.com";
-
-// Available CORS proxies (public free services)
-const CORS_PROXIES = {
-  corsproxy: "https://corsproxy.io/",
-  allorigins: "https://api.allorigins.win/raw?url=",
-  none: "",
+const STORAGE_KEYS = {
+  apiBase: "voice_clone_api_base",
+  language: "voice_clone_language",
+  model: "voice_clone_model",
 };
 
-let CORS_PROXY = localStorage.getItem("voice_clone_proxy") || "corsproxy";
-let proxyUrl = CORS_PROXIES[CORS_PROXY] || "";
+const LANGUAGE_OPTIONS = [
+  { code: "zh-CHS", label: "中文", sample: "大家好，欢迎使用有道智云大模型声音复刻。" },
+  { code: "en", label: "英文", sample: "Hello everyone, welcome to Youdao Zhiyun voice cloning." },
+  { code: "de", label: "德语", sample: "Willkommen bei Youdao Zhiyun." },
+  { code: "fr", label: "法语", sample: "Bienvenue chez Youdao Zhiyun." },
+  { code: "ja", label: "日语", sample: "有道智云の大規模モデル音声合成へようこそ。" },
+  { code: "ko", label: "韩语", sample: "유다오 즈윈 대형 모델 음성 합성에 오신 것을 환영합니다." },
+  { code: "id", label: "印尼语", sample: "Selamat datang di Youdao Zhiyun." },
+  { code: "vi", label: "越南语", sample: "Chào mừng bạn đến với Youdao Zhiyun." },
+  { code: "th", label: "泰语", sample: "ยินดีต้อนรับสู่ Youdao Zhiyun" },
+  { code: "ru", label: "俄语", sample: "Добро пожаловать в Youdao Zhiyun." },
+  { code: "it", label: "意大利语", sample: "Benvenuti su Youdao Zhiyun." },
+  { code: "pt", label: "葡萄牙语", sample: "Bem-vindo ao Youdao Zhiyun." },
+  { code: "es", label: "西班牙语", sample: "Bienvenido a Youdao Zhiyun." },
+  { code: "ms", label: "马来语", sample: "Selamat datang ke Youdao Zhiyun." },
+];
 
-function apiUrl(path) {
-  const p = path.startsWith("/") ? path.slice(1) : path;
-  return proxyUrl ? proxyUrl + API_BASE + "/" + p : API_BASE + "/" + p;
+const MODEL_OPTIONS = {
+  lite: { label: "lite", hint: "速度更快，支持中文/英文" },
+  pro: { label: "pro", hint: "质量更好，支持更多语种" },
+};
+
+const LANGUAGE_LOOKUP = new Map();
+LANGUAGE_OPTIONS.forEach(option => {
+  [option.code, option.label].forEach(value => {
+    LANGUAGE_LOOKUP.set(String(value).toLowerCase(), option.code);
+  });
+});
+
+function normalizeBaseUrl(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
 }
 
-// Restore proxy select value
-function setProxy(val) {
-  const sel = document.getElementById("proxy-select");
-  if (!val) val = sel ? sel.value : CORS_PROXY;
-  CORS_PROXY = val;
-  proxyUrl = CORS_PROXIES[val] || "";
-  localStorage.setItem("voice_clone_proxy", val);
-  const hint = document.getElementById("proxy-hint");
-  if (hint) {
-    if (val === "none") hint.textContent = "直接请求有道 API（需要浏览器插件或部署后端）";
-    else hint.textContent = "通过公共代理转发请求，仅用于测试";
-  }
+function getDefaultApiBase() {
+  const saved = normalizeBaseUrl(localStorage.getItem(STORAGE_KEYS.apiBase));
+  if (saved) return saved;
+  if (window.location.protocol === "file:") return "http://localhost:5001";
+  return normalizeBaseUrl(window.location.origin) || "http://localhost:5001";
 }
 
+function getLanguageOption(code) {
+  return LANGUAGE_OPTIONS.find(option => option.code === code) || LANGUAGE_OPTIONS[0];
+}
+
+function getLanguageLabel(code) {
+  return getLanguageOption(code).label;
+}
+
+function normalizeLanguage(value, fallback = "zh-CHS") {
+  const key = String(value || "").trim().toLowerCase();
+  if (!key) return fallback;
+  if (LANGUAGE_LOOKUP.has(key)) return LANGUAGE_LOOKUP.get(key);
+  const matched = LANGUAGE_OPTIONS.find(option =>
+    option.code.toLowerCase().includes(key) ||
+    option.label.toLowerCase().includes(key)
+  );
+  return matched ? matched.code : fallback;
+}
+
+function isLiteCompatible(code) {
+  return code === "zh-CHS" || code === "en";
+}
+
+function escapeHtml(value) {
+  const div = document.createElement("div");
+  div.textContent = value ?? "";
+  return div.innerHTML;
+}
+
+function csvEscape(value) {
+  const text = String(value ?? "");
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+let API_BASE = getDefaultApiBase();
+let selectedLanguage = normalizeLanguage(localStorage.getItem(STORAGE_KEYS.language) || "zh-CHS");
+let selectedModel = MODEL_OPTIONS[localStorage.getItem(STORAGE_KEYS.model)] ? localStorage.getItem(STORAGE_KEYS.model) : "pro";
 let voiceId = null;
 let synthesisItems = [];
 let audioFile = null;
 let currentTaskId = null;
 
-// ----- Utils -----
 const $ = id => document.getElementById(id);
 
 function showMsg(html, type = "error") {
   const container = document.querySelector(".container");
+  if (!container) return;
   const msg = document.createElement("div");
   msg.className = "msg " + (type === "success" ? "success" : "error");
   msg.innerHTML = html;
-  container.insertBefore(msg, container.children[1]);
-  setTimeout(() => msg.remove(), 4000);
+  const anchor = container.children[1] || container.children[0] || null;
+  container.insertBefore(msg, anchor);
+  setTimeout(() => msg.remove(), 4500);
 }
 
-function hide(el) { el.classList.add("hidden"); }
-function show(el) { el.classList.remove("hidden"); }
+function hide(el) {
+  if (el) el.classList.add("hidden");
+}
+
+function show(el) {
+  if (el) el.classList.remove("hidden");
+}
 
 function toggleSecret() {
   const input = $("appSecret");
   const icon = $("eye-icon");
+  if (!input || !icon) return;
   input.type = input.type === "password" ? "text" : "password";
   icon.className = input.type === "password" ? "fa-regular fa-eye" : "fa-regular fa-eye-slash";
 }
 
-function getCredentials() {
-  const k = $("appKey").value.trim();
-  const s = $("appSecret").value.trim();
-  if (!k || !s) { showMsg("请先填写 App Key 和 App Secret"); return null; }
-  return { appKey: k, appSecret: s };
+function checkCredentials() {
+  const appKey = $("appKey").value.trim();
+  const appSecret = $("appSecret").value.trim();
+  if (!appKey || !appSecret) {
+    showMsg("请先填写 App Key 和 App Secret");
+    return null;
+  }
+  return { appKey, appSecret };
 }
 
-function generateSign(appKey, appSecret) {
-  const salt = crypto.randomUUID();
-  const curtime = String(Math.floor(Date.now() / 1000));
-  const enc = new TextEncoder();
-  return crypto.subtle.digest("SHA-256", enc.encode(appKey + salt + curtime + appSecret)).then(buf => {
-    const sign = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
-    return { salt, curtime, sign };
+function updateApiHint() {
+  const hint = $("api-base-hint");
+  if (!hint) return;
+  hint.textContent = API_BASE
+    ? `当前后端地址：${API_BASE}`
+    : "请输入可访问的后端地址。页面会通过你的后端转发到有道 API，不再使用公共代理。";
+}
+
+function saveApiBase(value) {
+  const input = $("api-base");
+  const next = normalizeBaseUrl(typeof value === "string" ? value : input ? input.value : "");
+  API_BASE = next || getDefaultApiBase();
+  localStorage.setItem(STORAGE_KEYS.apiBase, API_BASE);
+  if (input) input.value = API_BASE;
+  updateApiHint();
+  showMsg("后端地址已保存", "success");
+}
+
+function updateLanguageUI() {
+  const option = getLanguageOption(selectedLanguage);
+  const hint = $("language-hint");
+  if (hint) {
+    hint.textContent = selectedModel === "lite"
+      ? `lite 仅支持中文/英文；当前选择 ${option.label}。`
+      : `当前选择 ${option.label}。pro 支持更多语种。`;
+  }
+  const result = $("voice-id-display");
+  if (result && voiceId) {
+    result.textContent = `Voice ID: ${voiceId} | 模型: ${MODEL_OPTIONS[selectedModel].label} | 语种: ${option.label}`;
+  }
+  updateManualPlaceholders();
+}
+
+function updateModelUI() {
+  const hint = $("model-hint");
+  if (hint) hint.textContent = MODEL_OPTIONS[selectedModel].hint;
+}
+
+function applyCompatibilityRules() {
+  if (selectedModel === "lite" && !isLiteCompatible(selectedLanguage)) {
+    selectedModel = "pro";
+    localStorage.setItem(STORAGE_KEYS.model, selectedModel);
+    const modelSelect = $("model-select");
+    if (modelSelect) modelSelect.value = selectedModel;
+    showMsg("lite 仅支持中文/英文，已自动切换到 pro");
+  }
+}
+
+function setLanguage(value) {
+  selectedLanguage = normalizeLanguage(value);
+  localStorage.setItem(STORAGE_KEYS.language, selectedLanguage);
+  const select = $("language-select");
+  if (select) select.value = selectedLanguage;
+  applyCompatibilityRules();
+  updateLanguageUI();
+}
+
+function setModel(value) {
+  selectedModel = MODEL_OPTIONS[value] ? value : "pro";
+  localStorage.setItem(STORAGE_KEYS.model, selectedModel);
+  const select = $("model-select");
+  if (select) select.value = selectedModel;
+  applyCompatibilityRules();
+  updateLanguageUI();
+  updateModelUI();
+}
+
+function renderLanguageOptions() {
+  const select = $("language-select");
+  if (!select) return;
+  select.innerHTML = LANGUAGE_OPTIONS.map(option => (
+    `<option value="${option.code}">${option.label} (${option.code})</option>`
+  )).join("");
+}
+
+function updateManualPlaceholders() {
+  const placeholder = `输入要合成的${getLanguageLabel(selectedLanguage)}文本`;
+  document.querySelectorAll(".input-text").forEach(input => {
+    if (!input.value.trim()) input.placeholder = placeholder;
   });
 }
 
-// ----- Audio Upload -----
-$("audioFile").addEventListener("change", e => handleAudio(e.target.files[0]));
-setupDrop("audio-dropzone", [".wav", "audio/wav"], f => handleAudio(f));
-
 function handleAudio(file) {
   if (!file || !file.name.toLowerCase().endsWith(".wav")) {
-    showMsg("仅支持 .wav 格式音频"); return;
+    showMsg("仅支持 .wav 格式音频");
+    return;
   }
   audioFile = file;
+  voiceId = null;
   $("audio-filename").textContent = file.name;
   hide($("audio-dropzone"));
   show($("audio-preview"));
+  hide($("voice-id-display"));
 }
 
 function clearAudio() {
@@ -97,211 +230,249 @@ function clearAudio() {
 }
 
 function setupDrop(id, types, cb) {
-  const dz = $(id);
-  dz.addEventListener("dragover", e => { e.preventDefault(); dz.classList.add("dragover"); });
-  dz.addEventListener("dragleave", () => dz.classList.remove("dragover"));
-  dz.addEventListener("drop", e => {
-    e.preventDefault(); dz.classList.remove("dragover");
-    const f = e.dataTransfer.files[0];
-    if (f && types.some(t => f.name.toLowerCase().endsWith(t) || f.type.includes(t))) cb(f);
+  const zone = $(id);
+  zone.addEventListener("dragover", event => {
+    event.preventDefault();
+    zone.classList.add("dragover");
+  });
+  zone.addEventListener("dragleave", () => zone.classList.remove("dragover"));
+  zone.addEventListener("drop", event => {
+    event.preventDefault();
+    zone.classList.remove("dragover");
+    const file = event.dataTransfer.files[0];
+    if (file && types.some(type => file.name.toLowerCase().endsWith(type) || file.type.includes(type))) {
+      cb(file);
+    }
   });
 }
 
-// ----- Clone Voice -----
+function getFileItemsFromExcel(fileRows) {
+  if (!fileRows.length) return [];
+  const headers = fileRows[0].map(header => String(header ?? "").trim());
+  let textCol = headers.findIndex(header => header.includes("文本") || header.toLowerCase().includes("text"));
+  let emotionCol = headers.findIndex(header => header.includes("情绪") || header.toLowerCase().includes("emotion"));
+  let languageCol = headers.findIndex(header => header.includes("语种") || header.includes("语言") || header.toLowerCase().includes("language") || header.toLowerCase().includes("lang"));
+  if (textCol === -1) textCol = 0;
+  const items = [];
+  for (let i = 1; i < fileRows.length; i++) {
+    const row = fileRows[i] || [];
+    const text = String(row[textCol] || "").trim();
+    if (!text) continue;
+    items.push({
+      text,
+      emotion: emotionCol === -1 ? "" : String(row[emotionCol] || "").trim(),
+      language: normalizeLanguage(languageCol === -1 ? selectedLanguage : row[languageCol]),
+    });
+  }
+  return items;
+}
+
+function renderExcelPreview(items) {
+  const body = $("excel-tbody");
+  body.innerHTML = "";
+  items.forEach((item, index) => {
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td>${index + 1}</td>
+      <td class="col-text">${escapeHtml(item.text)}</td>
+      <td>${escapeHtml(getLanguageLabel(item.language || selectedLanguage))}</td>
+      <td>${escapeHtml(item.emotion || "")}</td>
+    `;
+    body.appendChild(row);
+  });
+  show($("excel-preview"));
+}
+
+function downloadTemplate() {
+  const sample = getLanguageOption(selectedLanguage).sample;
+  const rows = [
+    ["文本", "语种", "情绪"],
+    [sample, getLanguageLabel(selectedLanguage), ""],
+  ];
+  const csv = rows.map(row => row.map(csvEscape).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const link = Object.assign(document.createElement("a"), {
+    href: URL.createObjectURL(blob),
+    download: "voice_clone_template.csv",
+  });
+  link.click();
+}
+
+function switchTab(name) {
+  document.querySelectorAll(".tab-btn").forEach(button => button.classList.remove("active"));
+  $("tab-" + name).classList.add("active");
+  hide($("panel-excel"));
+  hide($("panel-manual"));
+  show($("panel-" + name));
+  updateManualPlaceholders();
+}
+
+function addManualRow() {
+  const row = document.createElement("div");
+  row.className = "manual-row";
+  row.innerHTML = `
+    <input type="text" class="input-text" placeholder="输入要合成的${getLanguageLabel(selectedLanguage)}文本">
+    <select class="input-emotion">
+      <option value="">自然</option>
+      <option value="开心">开心</option>
+      <option value="悲伤">悲伤</option>
+      <option value="愤怒">愤怒</option>
+      <option value="恐惧">恐惧</option>
+      <option value="厌恶">厌恶</option>
+      <option value="惊讶">惊讶</option>
+    </select>
+  `;
+  $("manual-rows").appendChild(row);
+}
+
+function getManualItems() {
+  const rows = document.querySelectorAll("#manual-rows .manual-row");
+  const items = [];
+  rows.forEach(row => {
+    const text = row.querySelector(".input-text").value.trim();
+    const emotion = row.querySelector(".input-emotion").value;
+    if (text) {
+      items.push({
+        text,
+        emotion,
+        language: selectedLanguage,
+      });
+    }
+  });
+  return items;
+}
+
 async function cloneVoice() {
-  const cred = getCredentials(); if (!cred) return;
-  if (!audioFile) { showMsg("请先上传音频文件"); return; }
-
+  const cred = checkCredentials();
+  if (!cred) return;
+  if (!audioFile) {
+    showMsg("请先上传音频文件");
+    return;
+  }
   $("btn-clone").disabled = true;
-  const { salt, curtime, sign } = await generateSign(cred.appKey, cred.appSecret);
-
-  const fd = new FormData();
-  fd.append("appKey", cred.appKey);
-  fd.append("curtime", curtime);
-  fd.append("salt", salt);
-  fd.append("sign", sign);
-  fd.append("signType", "v4");
-  fd.append("name", "Clone_" + Date.now());
-  fd.append("model", "pro");
-  fd.append("audioFile", audioFile, audioFile.name);
-
+  const formData = new FormData();
+  formData.append("appKey", cred.appKey);
+  formData.append("appSecret", cred.appSecret);
+  formData.append("voiceName", "Clone_" + Date.now());
+  formData.append("model", selectedModel);
+  formData.append("language", selectedLanguage);
+  formData.append("audio", audioFile, audioFile.name);
   try {
-    const r = await fetch(apiUrl("/tts_gateway/v2/upload"), { method: "POST", body: fd });
-    const j = await r.json();
-    if (String(j.code) !== "0") {
-      showMsg("克隆失败: " + (j.message || JSON.stringify(j)));
-      $("btn-clone").disabled = false;
+    const response = await fetch(`${API_BASE}/api/clone`, { method: "POST", body: formData });
+    const payload = await response.json();
+    if (String(payload.code) !== "0") {
+      showMsg("克隆失败: " + (payload.message || JSON.stringify(payload)));
       return;
     }
-    voiceId = j.data.voiceId;
-    $("voice-id-display").textContent = "Voice ID: " + voiceId + "";
+    voiceId = payload.data.voiceId;
+    $("voice-id-display").textContent = `Voice ID: ${voiceId} | 模型: ${MODEL_OPTIONS[selectedModel].label} | 语种: ${getLanguageLabel(selectedLanguage)}`;
     show($("voice-id-display"));
     showMsg("音色克隆成功！", "success");
-  } catch (e) {
-    if (e.message && e.message.includes("CORS")) {
-      showMsg("CORS 限制，请尝试切换代理或部署后端", "error");
-    } else {
-      showMsg("克隆请求出错: " + e.message);
-    }
+  } catch (error) {
+    showMsg("克隆请求出错: " + error.message);
   }
   $("btn-clone").disabled = false;
 }
-
-// ----- Excel / Manual Upload -----
-$("excelFile").addEventListener("change", e => handleExcel(e.target.files[0]));
-setupDrop("excel-dropzone", [".xlsx", ".xls"], f => handleExcel(f));
 
 async function handleExcel(file) {
   if (!file) return;
   if (typeof XLSX === "undefined") {
     showMsg("Excel 解析库加载中，请稍候...");
-    await new Promise(r => setTimeout(r, 800));
-    if (typeof XLSX === "undefined") { showMsg("无法解析 Excel，请刷新页面试试"); return; }
+    await new Promise(resolve => setTimeout(resolve, 800));
+    if (typeof XLSX === "undefined") {
+      showMsg("无法解析 Excel，请刷新页面试试");
+      return;
+    }
   }
-  const ab = await file.arrayBuffer();
-  const wb = XLSX.read(ab);
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
-  if (!rows.length) { showMsg("Excel 为空"); return; }
-  const headers = rows[0].map(h => String(h).trim());
-  let textCol = headers.findIndex(h => h.includes("文本") || h.toLowerCase().includes("text"));
-  let emoCol = headers.findIndex(h => h.includes("情绪") || h.toLowerCase().includes("emotion"));
-  if (textCol === -1) textCol = 0;
-  if (emoCol === -1) emoCol = 1;
-
-  const items = [];
-  for (let i = 1; i < rows.length; i++) {
-    const row = rows[i];
-    const text = String(row[textCol] || "").trim();
-    const emotion = String(row[emoCol] || "").trim();
-    if (text) items.push({ text, emotion });
+  const workbook = XLSX.read(await file.arrayBuffer());
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+  const items = getFileItemsFromExcel(rows);
+  if (!items.length) {
+    showMsg("Excel 为空或缺少有效文本");
+    return;
   }
   synthesisItems = items;
   renderExcelPreview(items);
-  showMsg(`解析成功，共 ${items.length} 条`, "success");
   show($("panel-excel"));
+  showMsg(`解析成功，共 ${items.length} 条`, "success");
 }
 
-function renderExcelPreview(items) {
-  const tb = $("excel-tbody"); tb.innerHTML = "";
-  items.forEach((it, i) => {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${i + 1}</td><td class="col-text">${escapeHtml(it.text)}</td><td>${escapeHtml(it.emotion || "")}</td>`;
-    tb.appendChild(tr);
-  });
-  show($("excel-preview"));
-}
-
-function escapeHtml(s) {
-  const d = document.createElement("div"); d.textContent = s; return d.innerHTML;
-}
-
-function downloadTemplate() {
-  const csv = "文本,情绪,\n你好，这是一段示例文本,开心,\n今天天气真不错,自然,";
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: "template.csv" });
-  a.click();
-}
-
-function switchTab(name) {
-  document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
-  $("tab-" + name).classList.add("active");
-  hide($("panel-excel")); hide($("panel-manual"));
-  show($("panel-" + name));
-}
-
-function addManualRow() {
-  const div = document.createElement("div");
-  div.className = "manual-row";
-  div.innerHTML = `<input type="text" class="input-text" placeholder="输入要合成的文本"><select class="input-emotion">` +
-    "<option value=\"\">自然</option><option value=\"开心\">开心</option><option value=\"悲伤\">悲伤</option>" +
-    "<option value=\"愤怒\">愤怒</option><option value=\"恐惧\">恐惧</option>" +
-    "<option value=\"厌恶\">厌恶</option><option value=\"惊讶\">惊讶</option></select>";
-  $("manual-rows").appendChild(div);
-}
-
-function getManualItems() {
-  const rows = document.querySelectorAll("#manual-rows .manual-row");
-  const arr = [];
-  rows.forEach(r => {
-    const t = r.querySelector(".input-text").value.trim();
-    const e = r.querySelector(".input-emotion").value;
-    if (t) arr.push({ text: t, emotion: e });
-  });
-  return arr;
-}
-
-// init proxy select
-setProxy();
-if ($("proxy-select")) $("proxy-select").value = CORS_PROXY;
-
-// ----- Synthesis -----
 async function startSynthesis() {
-  const cred = getCredentials(); if (!cred) return;
-  if (!voiceId) { showMsg("请先完成音色克隆"); return; }
+  const cred = checkCredentials();
+  if (!cred) return;
+  if (!voiceId) {
+    showMsg("请先完成音色克隆");
+    return;
+  }
 
   const activeTab = $("tab-excel").classList.contains("active") ? "excel" : "manual";
   const items = activeTab === "excel" ? synthesisItems : getManualItems();
-  if (!items.length) { showMsg("请先导入文本或手动输入"); return; }
+  if (!items.length) {
+    showMsg("请先导入文本或手动输入");
+    return;
+  }
 
+  const normalizedItems = items.map(item => ({
+    ...item,
+    language: normalizeLanguage(item.language || selectedLanguage),
+  }));
+
+  if (selectedModel === "lite") {
+    const unsupported = normalizedItems.find(item => !isLiteCompatible(item.language));
+    if (unsupported) {
+      showMsg(`lite 仅支持中文/英文，${getLanguageLabel(unsupported.language)} 请切换到 pro`);
+      return;
+    }
+  }
+
+  synthesisItems = normalizedItems;
   show($("overlay"));
   currentTaskId = null;
 
   try {
-    const { salt, curtime, sign } = await generateSign(cred.appKey, cred.appSecret);
-
-    const qList = items.map(it => {
-      const o = { q: it.text };
-      if (it.emotion) o.emotionReferText = it.emotion;
-      return o;
-    });
-
-    const payload = {
-      appKey: cred.appKey,
-      curtime, salt, sign,
-      signType: "v4",
-      voiceId,
-      format: $("format").value,
-      qList,
-    };
-    const speed = parseFloat($("speed").value);
-    const volume = parseFloat($("volume").value);
-    if (!isNaN(speed)) payload.speed = String(speed);
-    if (!isNaN(volume)) payload.volume = String(volume);
-
-    const r = await fetch(apiUrl("/tts_gateway/v2/synthesis_async"), {
+    const response = await fetch(`${API_BASE}/api/synthesize`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        appKey: cred.appKey,
+        appSecret: cred.appSecret,
+        voiceId,
+        model: selectedModel,
+        language: selectedLanguage,
+        items: normalizedItems,
+        format: $("format").value,
+        speed: parseFloat($("speed").value),
+        volume: parseFloat($("volume").value),
+      }),
     });
-    const j = await r.json();
-    if (String(j.code) !== "0") { hide($("overlay")); showMsg("提交失败: " + (j.message || JSON.stringify(j))); return; }
-    currentTaskId = j.data.taskId;
+    const payload = await response.json();
+    if (String(payload.code) !== "0") {
+      hide($("overlay"));
+      showMsg("提交失败: " + (payload.message || JSON.stringify(payload)));
+      return;
+    }
+    currentTaskId = payload.data.taskId;
     pollProgress(cred.appKey, cred.appSecret);
-  } catch (e) {
-    hide($("overlay")); showMsg("提交出错: " + e.message);
+  } catch (error) {
+    hide($("overlay"));
+    showMsg("提交出错: " + error.message);
   }
 }
 
 async function pollProgress(appKey, appSecret) {
   while (true) {
-    await new Promise(r => setTimeout(r, 3000));
+    await new Promise(resolve => setTimeout(resolve, 3000));
     try {
-      const { salt, curtime, sign } = await generateSign(appKey, appSecret);
-      const payload = { appKey, curtime, salt, sign, signType: "v4", taskId: currentTaskId };
-      const r = await fetch(apiUrl("/tts_gateway/v2/get_progress"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const j = await r.json();
-      if (String(j.code) !== "0") continue;
-      const data = j.data || {};
+      const response = await fetch(`${API_BASE}/api/progress/${currentTaskId}?appKey=${encodeURIComponent(appKey)}&appSecret=${encodeURIComponent(appSecret)}`);
+      const payload = await response.json();
+      if (String(payload.code) !== "0") continue;
+      const data = payload.data || {};
       const status = data.status || "UNKNOWN";
       const total = data.totalCount || 0;
-      const succ = data.successCount || 0;
+      const success = data.successCount || 0;
       $("progress-status").textContent = status === "SUCCESS" ? "合成完成" : status;
-      $("progress-count").textContent = `${succ} / ${total}`;
+      $("progress-count").textContent = `${success} / ${total}`;
       if (status === "SUCCESS" || status === "PARTIAL_SUCCESS") {
         hide($("overlay"));
         await fetchResults(appKey, appSecret);
@@ -315,36 +486,78 @@ async function pollProgress(appKey, appSecret) {
 
 async function fetchResults(appKey, appSecret) {
   try {
-    const { salt, curtime, sign } = await generateSign(appKey, appSecret);
-    const payload = { appKey, curtime, salt, sign, signType: "v4", taskId: currentTaskId };
-    const r = await fetch(apiUrl("/tts_gateway/v2/get_result"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const j = await r.json();
-    if (String(j.code) !== "0") { showMsg("获取结果失败: " + (j.message || "未知错误")); return; }
-    renderResults(j.data || []);
+    const response = await fetch(`${API_BASE}/api/results/${currentTaskId}?appKey=${encodeURIComponent(appKey)}&appSecret=${encodeURIComponent(appSecret)}`);
+    const payload = await response.json();
+    if (String(payload.code) !== "0") {
+      showMsg("获取结果失败: " + (payload.message || "未知错误"));
+      return;
+    }
+    renderResults(payload.data || []);
     show($("results-card"));
-  } catch (e) { showMsg("获取结果出错: " + e.message); }
+  } catch (error) {
+    showMsg("获取结果出错: " + error.message);
+  }
 }
 
 function renderResults(data) {
   const list = $("results-list");
   list.innerHTML = "";
-  data.forEach((item, idx) => {
-    const div = document.createElement("div");
-    div.className = "result-item";
+  data.forEach((item, index) => {
+    const displayIndex = typeof item.qIndex === "number" ? item.qIndex + 1 : index + 1;
+    const itemData = synthesisItems[displayIndex - 1] || { text: "", emotion: "自然", language: selectedLanguage };
     const url = item.mediaUrl || "";
-    const itemData = synthesisItems[idx] || { text: "", emotion: "自然" };
-    div.innerHTML = `
-      <span class="idx">#${item.qIndex ?? idx + 1}</span>
+    const row = document.createElement("div");
+    row.className = "result-item";
+    row.innerHTML = `
+      <span class="idx">#${displayIndex}</span>
       <span class="text" title="${escapeHtml(itemData.text)}">${escapeHtml(itemData.text)}</span>
+      <span class="lang">${escapeHtml(getLanguageLabel(itemData.language || selectedLanguage))}</span>
       <span class="emot">${escapeHtml(itemData.emotion || "自然")}</span>
       ${url ? `<span class="status ok"><i class="fa-solid fa-check"></i></span>` : `<span class="status error">失败</span>`}
       ${url ? `<audio controls src="${url}"></audio>` : ""}
       ${url ? `<a href="${url}" target="_blank" download><i class="fa-solid fa-download"></i> 下载</a>` : ""}
     `;
-    list.appendChild(div);
+    list.appendChild(row);
   });
 }
+
+function initApp() {
+  renderLanguageOptions();
+
+  const apiInput = $("api-base");
+  if (apiInput) {
+    apiInput.value = API_BASE;
+    apiInput.addEventListener("change", () => saveApiBase(apiInput.value));
+  }
+
+  const languageSelect = $("language-select");
+  if (languageSelect) {
+    languageSelect.value = selectedLanguage;
+    languageSelect.addEventListener("change", event => setLanguage(event.target.value));
+  }
+
+  const modelSelect = $("model-select");
+  if (modelSelect) {
+    modelSelect.value = selectedModel;
+    modelSelect.addEventListener("change", event => setModel(event.target.value));
+  }
+
+  const audioInput = $("audioFile");
+  if (audioInput) audioInput.addEventListener("change", event => handleAudio(event.target.files[0]));
+  const excelInput = $("excelFile");
+  if (excelInput) excelInput.addEventListener("change", event => handleExcel(event.target.files[0]));
+
+  setupDrop("audio-dropzone", [".wav", "audio/wav"], file => handleAudio(file));
+  setupDrop("excel-dropzone", [".xlsx", ".xls"], file => handleExcel(file));
+
+  updateApiHint();
+  updateModelUI();
+  updateLanguageUI();
+  updateManualPlaceholders();
+
+  if ($("tab-excel")) $("tab-excel").classList.add("active");
+  if ($("panel-excel")) show($("panel-excel"));
+  if ($("panel-manual")) hide($("panel-manual"));
+}
+
+initApp();
