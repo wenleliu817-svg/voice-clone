@@ -41,7 +41,7 @@ docker run -p 5001:5001 youdao-voice-clone
 1. 注册并登录 [有道 AI 开放平台](https://ai.youdao.com)
 2. 创建应用，开通「大模型声音复刻」和「大模型语音合成」服务
 3. 在页面中填入 App Key 和 App Secret 即可使用
-4. 静态页面需要指向可访问的后端地址，不再使用公共 CORS 代理
+4. 静态页面可选两种接法：部署自己的后端，或填写 CorsProxy API Key 直连有道接口
 
 ## 文件结构
 
@@ -66,6 +66,7 @@ docker run -p 5001:5001 youdao-voice-clone
 - **后端**: Python + Flask
 - **API**: 有道声音复刻 + 语音合成 API
 - **语种/模型**: `lite` 支持中文/英文，`pro` 支持更多语种
+- **外网访问**: GitHub Pages 页面地址保持不变，接口地址单独配置
 
 ## License
 
