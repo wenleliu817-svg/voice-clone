@@ -153,18 +153,6 @@ def save_generated_audio(data, content_type, index):
 
 
 def build_text_items(text, language):
-    raw = str(text or "").splitlines()
-    items = []
-    for line in raw:
-        value = line.strip()
-        if value:
-            items.append({
-                "text": value,
-                "emotion": "",
-                "language": normalize_language(language),
-            })
-    if items:
-        return items
     value = str(text or "").strip()
     if not value:
         return []

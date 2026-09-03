@@ -420,12 +420,11 @@ async function startSynthesis() {
     return;
   }
 
-  const items = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  synthesisItems = items.map(line => ({
-    text: line,
+  synthesisItems = [{
+    text,
     emotion: "",
     language: selectedLanguage,
-  }));
+  }];
   show($("overlay"));
   const synthBtn = $("btn-synthesize");
   if (synthBtn) synthBtn.disabled = true;

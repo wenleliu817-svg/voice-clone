@@ -11,8 +11,8 @@ function run() {
   );
 
   assert.ok(
-    !appJs.includes("prepareReferenceVoice()"),
-    "docs/app.js should not pre-clone the reference voice before synthesis"
+    !appJs.includes("split(/\\r?\\n/)"),
+    "docs/app.js should not split synthesis text by newline"
   );
 
   console.log("docs_app_flow.test.js passed");
