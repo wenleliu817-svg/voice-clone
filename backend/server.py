@@ -185,8 +185,6 @@ def upload_voice_clone(app_key, app_secret, voice_name, model, sample_rate, chan
         "signType": "v4",
         "name": voice_name[:50],
         "model": model,
-        "sampleRate": sample_rate,
-        "channel": channel,
     }
     files = {"audioFile": (secure_filename(audio.filename), audio.read())}
     if emotion_audio:
@@ -225,8 +223,6 @@ def submit_synthesis(app_key, app_secret, voice_id, model, items, audio_format, 
         "signType": "v4",
         "voiceId": voice_id,
         "format": audio_format,
-        "sampleRate": sample_rate,
-        "channel": channel,
         "qList": q_list,
     }
     if volume is not None:
@@ -327,36 +323,34 @@ def compose():
     audio_format = request.form.get("format", "wav").strip() or "wav"
     volume = request.form.get("volume")
     speed = request.form.get("speed")
-    sample_rate = request.form.get("sampleRate", "16000").strip() or "16000"
-    channel = request.form.get("channel", "1").strip() or "1"
-    wait_seconds = request.form.get("waitSeconds", str(DEFAULT_COMPOSE_TIMEOUT_SECONDS)).strip() or str(DEFAULT_COMPOSE_TIMEOUT_SECONDS)
-    poll_interval_seconds = request.form.get("pollIntervalSeconds", str(DEFAULT_COMPOSE_POLL_INTERVAL_SECONDS)).strip() or str(DEFAULT_COMPOSE_POLL_INTERVAL_SECONDS)
+    voice_id = request.form.get("voiceId", "").strip()
     audio = request.files.get("audio")
 
     if not app_key or not app_secret:
         return jsonify({"error": "Missing appKey or appSecret"}), 400
     if not text:
         return jsonify({"error": "Missing text"}), 400
-    if not audio:
-        return jsonify({"error": "Missing audio file"}), 400
     if model not in MODEL_OPTIONS:
         return jsonify({"error": "Invalid model"}), 400
 
-    clone_result = upload_voice_clone(
-        app_key=app_key,
-        app_secret=app_secret,
-        voice_name=voice_name,
-        model=model,
-        sample_rate=sample_rate,
-        channel=channel,
-        audio=audio,
-    )
-    if str(clone_result.get("code")) != "0":
-        return jsonify(clone_result)
-
-    voice_id = (((clone_result.get("data") or {}).get("voiceId")) or "").strip()
     if not voice_id:
-        return jsonify({"code": "missing_voice_id", "message": "Clone response missing voiceId", "raw": clone_result}), 500
+        if not audio:
+            return jsonify({"error": "Missing audio file"}), 400
+        clone_result = upload_voice_clone(
+            app_key=app_key,
+            app_secret=app_secret,
+            voice_name=voice_name,
+            model=model,
+            sample_rate="16000",
+            channel="1",
+            audio=audio,
+        )
+        if str(clone_result.get("code")) != "0":
+            return jsonify(clone_result)
+
+        voice_id = (((clone_result.get("data") or {}).get("voiceId")) or "").strip()
+        if not voice_id:
+            return jsonify({"code": "missing_voice_id", "message": "Clone response missing voiceId", "raw": clone_result}), 500
 
     items = build_text_items(text, language)
     if not items:
@@ -373,8 +367,6 @@ def compose():
             "signType": "v4",
             "voiceId": voice_id,
             "format": audio_format,
-            "sampleRate": sample_rate,
-            "channel": channel,
             "q": item["text"],
         }
         if volume is not None:

@@ -219,7 +219,7 @@ function handleAudio(file) {
   $("audio-filename").textContent = file.name;
   hide($("audio-dropzone"));
   show($("audio-preview"));
-  hide($("voice-id-display"));
+  setAudioStatus("参考音频已选择，可直接点击一键生成。", "success");
 }
 
 function clearAudio() {
@@ -228,7 +228,7 @@ function clearAudio() {
   $("audioFile").value = "";
   show($("audio-dropzone"));
   hide($("audio-preview"));
-  hide($("voice-id-display"));
+  setAudioStatus("");
 }
 
 function setupDrop(id, types, cb) {
@@ -249,158 +249,19 @@ function setupDrop(id, types, cb) {
   });
 }
 
-function getFileItemsFromExcel(fileRows) {
-  if (!fileRows.length) return [];
-  const headers = fileRows[0].map(header => String(header ?? "").trim());
-  let textCol = headers.findIndex(header => header.includes("文本") || header.toLowerCase().includes("text"));
-  let emotionCol = headers.findIndex(header => header.includes("情绪") || header.toLowerCase().includes("emotion"));
-  let languageCol = headers.findIndex(header => header.includes("语种") || header.includes("语言") || header.toLowerCase().includes("language") || header.toLowerCase().includes("lang"));
-  if (textCol === -1) textCol = 0;
-  const items = [];
-  for (let i = 1; i < fileRows.length; i++) {
-    const row = fileRows[i] || [];
-    const text = String(row[textCol] || "").trim();
-    if (!text) continue;
-    items.push({
-      text,
-      emotion: emotionCol === -1 ? "" : String(row[emotionCol] || "").trim(),
-      language: normalizeLanguage(languageCol === -1 ? selectedLanguage : row[languageCol]),
-    });
-  }
-  return items;
-}
-
-function renderExcelPreview(items) {
-  const body = $("excel-tbody");
-  body.innerHTML = "";
-  items.forEach((item, index) => {
-    const row = document.createElement("tr");
-    row.innerHTML = `
-      <td>${index + 1}</td>
-      <td class="col-text">${escapeHtml(item.text)}</td>
-      <td>${escapeHtml(getLanguageLabel(item.language || selectedLanguage))}</td>
-      <td>${escapeHtml(item.emotion || "")}</td>
-    `;
-    body.appendChild(row);
-  });
-  show($("excel-preview"));
-}
-
-function downloadTemplate() {
-  const sample = getLanguageOption(selectedLanguage).sample;
-  const rows = [
-    ["文本", "语种", "情绪"],
-    [sample, getLanguageLabel(selectedLanguage), ""],
-  ];
-  const csv = rows.map(row => row.map(csvEscape).join(",")).join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const link = Object.assign(document.createElement("a"), {
-    href: URL.createObjectURL(blob),
-    download: "voice_clone_template.csv",
-  });
-  link.click();
-}
-
-function switchTab(name) {
-  document.querySelectorAll(".tab-btn").forEach(button => button.classList.remove("active"));
-  $("tab-" + name).classList.add("active");
-  hide($("panel-excel"));
-  hide($("panel-manual"));
-  show($("panel-" + name));
-  updateManualPlaceholders();
-}
-
-function addManualRow() {
-  const row = document.createElement("div");
-  row.className = "manual-row";
-  row.innerHTML = `
-    <input type="text" class="input-text" placeholder="输入要合成的${getLanguageLabel(selectedLanguage)}文本">
-    <select class="input-emotion">
-      <option value="">自然</option>
-      <option value="开心">开心</option>
-      <option value="悲伤">悲伤</option>
-      <option value="愤怒">愤怒</option>
-      <option value="恐惧">恐惧</option>
-      <option value="厌恶">厌恶</option>
-      <option value="惊讶">惊讶</option>
-    </select>
-  `;
-  $("manual-rows").appendChild(row);
-}
-
-function getManualItems() {
-  const rows = document.querySelectorAll("#manual-rows .manual-row");
-  const items = [];
-  rows.forEach(row => {
-    const text = row.querySelector(".input-text").value.trim();
-    const emotion = row.querySelector(".input-emotion").value;
-    if (text) {
-      items.push({
-        text,
-        emotion,
-        language: selectedLanguage,
-      });
-    }
-  });
-  return items;
-}
-
-async function cloneVoice() {
-  const cred = checkCredentials();
-  if (!cred) return;
-  if (!audioFile) {
-    showMsg("请先上传音频文件");
-    return;
-  }
-  $("btn-clone").disabled = true;
-  const formData = new FormData();
-  formData.append("appKey", cred.appKey);
-  formData.append("appSecret", cred.appSecret);
-  formData.append("voiceName", "Clone_" + Date.now());
-  formData.append("model", selectedModel);
-  formData.append("language", selectedLanguage);
-  formData.append("audio", audioFile, audioFile.name);
-  try {
-    const payload = await requestJson("/api/clone", { method: "POST", body: formData }, "克隆请求");
-    if (String(payload.code) !== "0") {
-      showMsg("克隆失败: " + (payload.message || JSON.stringify(payload)));
-      return;
-    }
-    voiceId = payload.data.voiceId;
-    $("voice-id-display").textContent = `Voice ID: ${voiceId} | 模型: ${MODEL_OPTIONS[selectedModel].label} | 语种: ${getLanguageLabel(selectedLanguage)}`;
-    show($("voice-id-display"));
-    showMsg("音色克隆成功！", "success");
-  } catch (error) {
-    showMsg("克隆请求出错: " + error.message);
-  }
-  $("btn-clone").disabled = false;
+function setAudioStatus(message, type = "info") {
+  const status = $("audio-status");
+  if (!status) return;
+  status.textContent = message || "";
+  status.className = "field-hint" + (type === "error" ? " error" : type === "success" ? " success" : "");
 }
 
 async function handleExcel(file) {
-  if (!file) return;
-  if (typeof XLSX === "undefined") {
-    showMsg("Excel 解析库加载中，请稍候...");
-    await new Promise(resolve => setTimeout(resolve, 800));
-    if (typeof XLSX === "undefined") {
-      showMsg("无法解析 Excel，请刷新页面试试");
-      return;
-    }
-  }
-  const workbook = XLSX.read(await file.arrayBuffer());
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-  const items = getFileItemsFromExcel(rows);
-  if (!items.length) {
-    showMsg("Excel 为空或缺少有效文本");
-    return;
-  }
-  synthesisItems = items;
-  renderExcelPreview(items);
-  show($("panel-excel"));
-  showMsg(`解析成功，共 ${items.length} 条`, "success");
+  void file;
 }
 
 async function startSynthesis() {
+  const formData = new FormData();
   const cred = checkCredentials();
   if (!cred) return;
   if (!audioFile) {
@@ -513,6 +374,7 @@ function initApp() {
   setupDrop("audio-dropzone", [".wav", "audio/wav"], file => handleAudio(file));
   updateModelUI();
   updateLanguageUI();
+  setAudioStatus("");
 }
 
 initApp();
