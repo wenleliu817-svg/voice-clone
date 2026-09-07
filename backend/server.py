@@ -267,7 +267,8 @@ def wait_for_task_completion(app_key, app_secret, task_id, timeout_seconds=DEFAU
                         "data": result_payload.get("data", []),
                         "progress": data,
                     }
-                return result_payload
+                if str(result_payload.get("code")) != "207":
+                    return result_payload
 
         time.sleep(max(1, int(poll_interval_seconds)))
 

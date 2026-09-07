@@ -164,6 +164,19 @@ class ComposeFlowTest(unittest.TestCase):
         self.assertEqual(fields["sampleRate"], "16000")
         self.assertEqual(fields["channel"], "1")
 
+    def test_wait_for_task_retries_pending_result_after_success(self):
+        progress = {"code": "0", "data": {"status": "SUCCESS"}}
+        pending_result = {"code": "207", "message": "Result is not ready"}
+        completed_result = {"code": "0", "data": [{"mediaUrl": "https://cdn.example.com/audio.wav"}]}
+
+        with patch("backend.server.api_json_post", side_effect=[progress, pending_result, progress, completed_result]) as mock_post, \
+             patch("backend.server.time.sleep"):
+            result = server.wait_for_task_completion("app-key", "app-secret", "task-123", timeout_seconds=30, poll_interval_seconds=1)
+
+        self.assertEqual(result["code"], "0")
+        self.assertEqual(len(result["data"]), 1)
+        self.assertEqual(mock_post.call_count, 4)
+
 
 if __name__ == "__main__":
     unittest.main()
