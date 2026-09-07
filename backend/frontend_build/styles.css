@@ -171,6 +171,41 @@ input:focus, select:focus { border-color: var(--accent); }
 .result-item audio { height: 32px; width: 240px; }
 .result-item a { color: var(--accent-light); font-size: 0.8rem; }
 
+.progress-percent { color: var(--accent-light); font-size: 0.85rem; font-weight: 600; }
+.progress-steps {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  list-style: none;
+  margin: 4px 0 18px;
+}
+.progress-steps li {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  opacity: 0.72;
+}
+.progress-steps li > span:last-child { display: flex; flex-direction: column; gap: 3px; }
+.progress-steps strong { color: inherit; font-size: 0.8rem; font-weight: 600; }
+.progress-steps small { color: var(--text-muted); line-height: 1.35; }
+.progress-dot {
+  width: 28px; height: 28px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.progress-steps li.active { color: var(--accent-light); opacity: 1; }
+.progress-steps li.active .progress-dot { border-color: var(--accent); background: var(--accent); color: #fff; }
+.progress-steps li.done { color: var(--success); opacity: 1; }
+.progress-steps li.done .progress-dot { border-color: var(--success); color: var(--success); }
+.progress-steps li.failed { color: var(--error); opacity: 1; }
+.progress-steps li.failed .progress-dot { border-color: var(--error); color: var(--error); }
+
 .hidden { display: none !important; }
 
 .overlay {
@@ -227,3 +262,11 @@ input:focus, select:focus { border-color: var(--accent); }
 .deploy-text { color: var(--text-muted); font-size: 0.85rem; line-height: 1.6; margin-bottom: 14px; }
 .deploy-btns { display: flex; gap: 10px; flex-wrap: wrap; }
 .deploy-btns a { text-decoration: none; }
+
+@media (max-width: 620px) {
+  .container { padding: 24px 12px; }
+  .card { padding: 18px; }
+  .progress-steps { grid-template-columns: 1fr; gap: 12px; }
+  .progress-steps li { flex-direction: row; align-items: flex-start; }
+  .result-item audio { width: 100%; }
+}

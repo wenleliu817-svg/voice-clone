@@ -3,26 +3,17 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>有道声音克隆 · 批量合成</title>
+  <title>有道声音克隆 · 一键合成</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link rel="stylesheet" href="styles.css">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
-
-  <!-- Overlay for during synthesis -->
-  <div id="overlay" class="overlay hidden">
-    <div class="overlay-content">
-      <div class="spinner"></div>
-      <p class="overlay-text">正在生成音频，请稍候…</p>
-    </div>
-  </div>
 
   <div class="container">
     <header>
       <h1><i class="fa-solid fa-microphone-lines"></i> 有道声音克隆</h1>
-      <p class="subtitle">上传音色样本 & 批量合成语音</p>
+      <p class="subtitle">参考音频 + 文本，一次完成克隆与合成</p>
     </header>
 
     <!-- Step 1: Credentials -->
@@ -121,6 +112,21 @@
       </button>
     </section>
 
+    <section class="card hidden" id="progress-card" aria-live="polite">
+      <div class="card-header">
+        <h2><i class="fa-solid fa-bars-progress"></i> 处理进度</h2>
+        <span id="progress-percent" class="progress-percent">0%</span>
+      </div>
+      <ol class="progress-steps" id="progress-steps">
+        <li data-stage="received"><span class="progress-dot">1</span><span><strong>参考音频已接收</strong><small>等待开始</small></span></li>
+        <li data-stage="cloning"><span class="progress-dot">2</span><span><strong>克隆中</strong><small>正在创建音色</small></span></li>
+        <li data-stage="clone_complete"><span class="progress-dot">3</span><span><strong>克隆完成</strong><small>音色已准备好</small></span></li>
+        <li data-stage="synthesizing"><span class="progress-dot">4</span><span><strong>合成中</strong><small>正在生成音频</small></span></li>
+        <li data-stage="completed"><span class="progress-dot">5</span><span><strong>合成完成</strong><small>可以播放和下载</small></span></li>
+      </ol>
+      <p id="progress-message" class="progress-info">等待开始</p>
+    </section>
+
     <!-- Step 5: Results -->
     <section class="card hidden" id="results-card">
       <div class="card-header">
@@ -129,28 +135,9 @@
       <div id="results-list" class="results-list"></div>
     </section>
 
-    <!-- Deploy note -->
-    <section class="card card-muted">
-      <div class="card-header">
-        <h2><i class="fa-solid fa-rocket"></i> 部署说明</h2>
-      </div>
-      <p class="deploy-text">
-        本页面默认连接内置后端，点击一次就会自动完成参考音频克隆和文本合成。<br><br>
-        如需更换后端，可在网址后加上 <code>?apiBase=你的后端地址</code>。
-      </p>
-      <div class="deploy-btns">
-        <a href="https://render.com/deploy?repo=https://github.com/wenleliu817-svg/voice-clone" target="_blank" class="btn btn-primary">
-          <i class="fa-solid fa-cloud"></i> 一键部署到 Render
-        </a>
-        <a href="https://github.com/wenleliu817-svg/voice-clone#快速开始" target="_blank" class="btn btn-outline">
-          <i class="fa-brands fa-docker"></i> Docker 部署
-        </a>
-      </div>
-    </section>
-
   </div>
 
-  <script src="transport.js?v=20260902-3"></script>
-  <script src="app.js?v=20260902-3"></script>
+  <script src="transport.js?v=20260903-3"></script>
+  <script src="app.js?v=20260903-3"></script>
 </body>
 </html>

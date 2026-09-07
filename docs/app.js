@@ -37,7 +37,6 @@ if (!TRANSPORT) throw new Error("YoudaoVoiceCloneTransport 未加载");
 
 function getDefaultApiBase() {
   return TRANSPORT.resolveBackendBase({
-    queryBase: new URLSearchParams(window.location.search).get("apiBase"),
     locationProtocol: window.location.protocol,
     locationHostname: window.location.hostname,
     locationOrigin: window.location.origin,
@@ -90,12 +89,17 @@ async function requestJson(path, options = {}, label = "请求") {
     const snippet = raw.replace(/\s+/g, " ").slice(0, 120);
     throw new Error(`${label} 返回了 HTML 内容，通常是后端地址不对。当前地址：${API_BASE}。响应片段：${snippet}`);
   }
+  let payload;
   try {
-    return JSON.parse(raw);
+    payload = JSON.parse(raw);
   } catch {
     const snippet = raw.replace(/\s+/g, " ").slice(0, 120);
     throw new Error(`${label} 返回了无法解析的 JSON。当前地址：${API_BASE}。响应片段：${snippet}`);
   }
+  if (!response.ok) {
+    throw new Error(payload.message || payload.error || `${label}失败（HTTP ${response.status}）`);
+  }
+  return payload;
 }
 
 let API_BASE = getDefaultApiBase();
@@ -105,6 +109,8 @@ let voiceId = null;
 let synthesisItems = [];
 let audioFile = null;
 let currentTaskId = null;
+
+const PROGRESS_ORDER = ["received", "cloning", "clone_complete", "synthesizing", "completed"];
 
 const $ = id => document.getElementById(id);
 
@@ -260,8 +266,47 @@ async function handleExcel(file) {
   void file;
 }
 
+function setProgressStage(stage, message, progress) {
+  const card = $("progress-card");
+  if (!card) return;
+  show(card);
+  const currentIndex = PROGRESS_ORDER.indexOf(stage);
+  const failed = stage === "failed";
+  document.querySelectorAll("#progress-steps li").forEach((step, index) => {
+    step.classList.toggle("done", !failed && currentIndex >= 0 && index < currentIndex);
+    step.classList.toggle("active", !failed && index === currentIndex);
+    step.classList.toggle("failed", failed && index === Math.max(0, currentIndex));
+  });
+  const percent = $("progress-percent");
+  if (percent) percent.textContent = `${Math.max(0, Math.min(100, Number(progress) || 0))}%`;
+  const status = $("progress-message");
+  if (status) status.textContent = message || "正在处理…";
+}
+
+function wait(milliseconds) {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+async function pollComposeJob(jobId) {
+  for (let attempt = 0; attempt < 900; attempt += 1) {
+    const payload = await requestJson(`/api/compose/status/${encodeURIComponent(jobId)}`, {}, "查询合成进度");
+    const job = payload.data || {};
+    setProgressStage(job.stage, job.message, job.progress);
+    if (job.stage === "completed") {
+      const results = Array.isArray(job.result?.results) ? job.result.results : [];
+      renderResults(results);
+      show($("results-card"));
+      return;
+    }
+    if (job.stage === "failed") {
+      throw new Error(job.error || job.message || "合成失败");
+    }
+    await wait(2000);
+  }
+  throw new Error("任务等待超过 30 分钟，后端没有返回结果");
+}
+
 async function startSynthesis() {
-  const formData = new FormData();
   const cred = checkCredentials();
   if (!cred) return;
   if (!audioFile) {
@@ -286,7 +331,8 @@ async function startSynthesis() {
     emotion: "",
     language: selectedLanguage,
   }];
-  show($("overlay"));
+  hide($("results-card"));
+  setProgressStage("received", "正在提交任务…", 5);
   const synthBtn = $("btn-synthesize");
   if (synthBtn) synthBtn.disabled = true;
 
@@ -301,22 +347,22 @@ async function startSynthesis() {
     formData.append("speed", String($("speed").value));
     formData.append("volume", String($("volume").value));
     formData.append("audio", audioFile, audioFile.name);
-    const payload = await requestJson("/api/compose", {
+    const payload = await requestJson("/api/compose/start", {
       method: "POST",
       body: formData,
-    }, "一键生成");
+    }, "提交合成任务");
     if (String(payload.code) !== "0") {
       showMsg("生成失败: " + (payload.message || JSON.stringify(payload)));
       return;
     }
-    const results = Array.isArray(payload.data?.results) ? payload.data.results : [];
-    renderResults(results);
-    show($("results-card"));
+    currentTaskId = payload.data?.jobId || "";
+    if (!currentTaskId) throw new Error("后端没有返回任务编号");
+    await pollComposeJob(currentTaskId);
     showMsg("生成成功！", "success");
   } catch (error) {
+    setProgressStage("failed", error.message, 100);
     showMsg("生成出错: " + error.message);
   } finally {
-    hide($("overlay"));
     if (synthBtn) synthBtn.disabled = false;
   }
 }
@@ -336,8 +382,9 @@ function renderResults(data) {
     const proxiedUrl = TRANSPORT.buildMediaUrl({
       backendBase: API_BASE,
       mediaUrl: url,
-      filename: `audio_${displayIndex}.wav`,
+      filename: item.filename || `audio_${displayIndex}.wav`,
     });
+    const downloadUrl = proxiedUrl ? `${proxiedUrl}${proxiedUrl.includes("?") ? "&" : "?"}download=1` : "";
     const row = document.createElement("div");
     row.className = "result-item";
     row.innerHTML = `
@@ -346,7 +393,7 @@ function renderResults(data) {
       <span class="lang">${escapeHtml(getLanguageLabel(itemData.language || selectedLanguage))}</span>
       ${url ? `<span class="status ok"><i class="fa-solid fa-check"></i></span>` : `<span class="status error">失败</span>`}
       ${url ? `<audio controls src="${proxiedUrl}"></audio>` : ""}
-      ${url ? `<a href="${proxiedUrl}" target="_blank" download><i class="fa-solid fa-download"></i> 下载</a>` : ""}
+      ${url ? `<a class="btn btn-outline btn-small" href="${downloadUrl}" download><i class="fa-solid fa-download"></i> 下载音频</a>` : ""}
     `;
     list.appendChild(row);
   });

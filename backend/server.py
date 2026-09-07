@@ -1,6 +1,7 @@
 import os
 import hashlib
 import json
+import threading
 import time
 import uuid
 import zipfile
@@ -11,6 +12,7 @@ from urllib.error import HTTPError, URLError
 
 from flask import Flask, request, jsonify, send_file, abort
 from flask_cors import CORS
+from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 import pandas as pd
 
@@ -45,6 +47,8 @@ LANGUAGE_LOOKUP.update({"cn": "zh-CHS", "zh": "zh-CHS", "zh-cn": "zh-CHS", "chin
 MODEL_OPTIONS = {"lite", "pro"}
 DEFAULT_COMPOSE_TIMEOUT_SECONDS = 300
 DEFAULT_COMPOSE_POLL_INTERVAL_SECONDS = 3
+COMPOSE_JOBS = {}
+COMPOSE_JOBS_LOCK = threading.Lock()
 
 UPLOAD_DIR = Path(__file__).parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -56,6 +60,13 @@ CORS(app)
 
 
 # --- Helpers ---
+def get_server_port():
+    try:
+        return int(os.environ.get("PORT", "5001"))
+    except (TypeError, ValueError):
+        return 5001
+
+
 def generate_sign_v4(app_key, app_secret):
     salt = str(uuid.uuid4())
     curtime = str(int(time.time()))
@@ -173,6 +184,8 @@ def upload_voice_clone(app_key, app_secret, voice_name, model, sample_rate, chan
         "signType": "v4",
         "name": voice_name[:50],
         "model": model,
+        "sampleRate": sample_rate,
+        "channel": channel,
     }
     files = {"audioFile": (secure_filename(audio.filename), audio.read())}
     if emotion_audio:
@@ -211,6 +224,8 @@ def submit_synthesis(app_key, app_secret, voice_id, model, items, audio_format, 
         "signType": "v4",
         "voiceId": voice_id,
         "format": audio_format,
+        "sampleRate": sample_rate,
+        "channel": channel,
         "qList": q_list,
     }
     if volume is not None:
@@ -220,7 +235,7 @@ def submit_synthesis(app_key, app_secret, voice_id, model, items, audio_format, 
     return api_json_post(URI_SUBMIT, payload)
 
 
-def wait_for_task_completion(app_key, app_secret, task_id, timeout_seconds=DEFAULT_COMPOSE_TIMEOUT_SECONDS, poll_interval_seconds=DEFAULT_COMPOSE_POLL_INTERVAL_SECONDS):
+def wait_for_task_completion(app_key, app_secret, task_id, timeout_seconds=DEFAULT_COMPOSE_TIMEOUT_SECONDS, poll_interval_seconds=DEFAULT_COMPOSE_POLL_INTERVAL_SECONDS, on_progress=None):
     deadline = time.time() + max(1, int(timeout_seconds))
     last_progress = None
 
@@ -236,6 +251,11 @@ def wait_for_task_completion(app_key, app_secret, task_id, timeout_seconds=DEFAU
         }
         progress_result = api_json_post(URI_PROGRESS, payload)
         last_progress = progress_result
+        if callable(on_progress):
+            try:
+                on_progress(progress_result)
+            except Exception:
+                pass
         if str(progress_result.get("code")) == "0":
             data = progress_result.get("data") or {}
             status = str(data.get("status") or "").upper()
@@ -256,6 +276,124 @@ def wait_for_task_completion(app_key, app_secret, task_id, timeout_seconds=DEFAU
         "message": "Compose request timed out",
         "progress": last_progress,
     }
+
+
+def update_compose_job(job_id, **updates):
+    with COMPOSE_JOBS_LOCK:
+        job = COMPOSE_JOBS.get(job_id)
+        if job:
+            job.update(updates)
+
+
+def get_compose_job(job_id):
+    with COMPOSE_JOBS_LOCK:
+        job = COMPOSE_JOBS.get(job_id)
+        return dict(job) if job else None
+
+
+def run_compose_job(job_id, params, audio_bytes, audio_filename):
+    try:
+        update_compose_job(job_id, stage="cloning", progress=20, message="正在克隆参考音色，请稍候…")
+        audio = FileStorage(stream=BytesIO(audio_bytes), filename=audio_filename or "reference.wav")
+        clone_result = upload_voice_clone(
+            app_key=params["app_key"],
+            app_secret=params["app_secret"],
+            voice_name=params["voice_name"],
+            model=params["model"],
+            sample_rate="16000",
+            channel="1",
+            audio=audio,
+        )
+        if str(clone_result.get("code")) != "0":
+            update_compose_job(job_id, stage="failed", progress=100, message="克隆失败", error=clone_result.get("message") or str(clone_result))
+            return
+
+        voice_id = (((clone_result.get("data") or {}).get("voiceId")) or "").strip()
+        if not voice_id:
+            update_compose_job(job_id, stage="failed", progress=100, message="克隆失败", error="有道接口没有返回 voiceId")
+            return
+
+        update_compose_job(job_id, stage="clone_complete", progress=55, message="克隆完成，正在准备合成…", voiceId=voice_id)
+        items = build_text_items(params["text"], params["language"])
+        if not items:
+            update_compose_job(job_id, stage="failed", progress=100, message="合成失败", error="没有可合成的文本")
+            return
+
+        update_compose_job(job_id, stage="synthesizing", progress=70, message="正在提交合成任务，请稍候…")
+        submit_result = submit_synthesis(
+            app_key=params["app_key"],
+            app_secret=params["app_secret"],
+            voice_id=voice_id,
+            model=params["model"],
+            items=items,
+            audio_format=params["audio_format"],
+            volume=params["volume"],
+            speed=params["speed"],
+            sample_rate="16000",
+            channel="1",
+        )
+        if str(submit_result.get("code")) != "0":
+            update_compose_job(job_id, stage="failed", progress=100, message="合成失败", error=submit_result.get("message") or str(submit_result))
+            return
+
+        task_id = (((submit_result.get("data") or {}).get("taskId")) or "").strip()
+        if not task_id:
+            update_compose_job(job_id, stage="failed", progress=100, message="合成失败", error="有道接口没有返回 taskId")
+            return
+
+        update_compose_job(job_id, taskId=task_id, message="合成任务已提交，正在等待结果…")
+        task_result = wait_for_task_completion(
+            app_key=params["app_key"],
+            app_secret=params["app_secret"],
+            task_id=task_id,
+            timeout_seconds=DEFAULT_COMPOSE_TIMEOUT_SECONDS,
+            poll_interval_seconds=DEFAULT_COMPOSE_POLL_INTERVAL_SECONDS,
+            on_progress=lambda progress_result: update_compose_job(
+                job_id,
+                progress=75,
+                message=f"合成处理中：{str((progress_result.get('data') or {}).get('status') or 'PROCESSING')}",
+                taskProgress=progress_result.get("data") or {},
+            ),
+        )
+        if str(task_result.get("code")) != "0":
+            update_compose_job(job_id, stage="failed", progress=100, message="合成失败", error=task_result.get("message") or str(task_result))
+            return
+
+        result_items = task_result.get("data") or []
+        if not isinstance(result_items, list) or not result_items:
+            update_compose_job(job_id, stage="failed", progress=100, message="合成失败", error="有道接口没有返回合成结果")
+            return
+
+        results = []
+        for index, item in enumerate(result_items):
+            media_url = str(item.get("mediaUrl") or "").strip()
+            if not media_url:
+                continue
+            try:
+                req = Request(media_url, method="GET")
+                with urlopen(req, timeout=120) as resp:
+                    audio_bytes_result = resp.read()
+                    content_type = (resp.headers.get("Content-Type") or "audio/wav").split(";")[0].strip()
+                    filename, saved_media_url = save_generated_audio(audio_bytes_result, content_type, index)
+                    results.append({
+                        "qIndex": index,
+                        "filename": filename,
+                        "mediaUrl": saved_media_url,
+                        "contentType": content_type,
+                    })
+            except Exception as exc:
+                update_compose_job(job_id, stage="failed", progress=100, message="合成失败", error=str(exc))
+                return
+
+        update_compose_job(
+            job_id,
+            stage="completed",
+            progress=100,
+            message="合成完成",
+            result={"voiceId": voice_id, "taskId": task_id, "results": results},
+        )
+    except Exception as exc:
+        update_compose_job(job_id, stage="failed", progress=100, message="请求失败", error=str(exc))
 
 
 # --- API: Health ---
@@ -298,6 +436,68 @@ def clone_voice():
         files["emotionAudioFile"] = (secure_filename(emotion_audio.filename), emotion_audio.read())
     result = api_multipart_post(URI_UPLOAD, fields, files)
     return jsonify(result)
+
+
+@app.route("/api/compose/start", methods=["POST"])
+def start_compose_job():
+    app_key = request.form.get("appKey", "").strip()
+    app_secret = request.form.get("appSecret", "").strip()
+    text = request.form.get("text", "").strip()
+    language = normalize_language(request.form.get("language", "zh-CHS"))
+    model = request.form.get("model", "pro").strip() or "pro"
+    voice_name = request.form.get("voiceName", "OneShot").strip() or "OneShot"
+    audio_format = request.form.get("format", "wav").strip() or "wav"
+    volume = request.form.get("volume")
+    speed = request.form.get("speed")
+    audio = request.files.get("audio")
+
+    if not app_key or not app_secret:
+        return jsonify({"error": "Missing appKey or appSecret"}), 400
+    if not text:
+        return jsonify({"error": "Missing text"}), 400
+    if not audio:
+        return jsonify({"error": "Missing audio file"}), 400
+    if model not in MODEL_OPTIONS:
+        return jsonify({"error": "Invalid model"}), 400
+    if model == "lite" and language and not is_lite_language(language):
+        return jsonify({"error": f"lite model only supports 中文/英文, but found {language_label(language)}"}), 400
+
+    job_id = uuid.uuid4().hex
+    COMPOSE_JOBS[job_id] = {
+        "jobId": job_id,
+        "stage": "received",
+        "progress": 5,
+        "message": "参考音频已接收，等待开始…",
+        "voiceId": "",
+        "result": None,
+        "error": "",
+    }
+    params = {
+        "app_key": app_key,
+        "app_secret": app_secret,
+        "text": text,
+        "language": language,
+        "model": model,
+        "voice_name": voice_name,
+        "audio_format": audio_format,
+        "volume": volume,
+        "speed": speed,
+    }
+    worker = threading.Thread(
+        target=run_compose_job,
+        args=(job_id, params, audio.read(), secure_filename(audio.filename) or "reference.wav"),
+        daemon=True,
+    )
+    worker.start()
+    return jsonify({"code": "0", "data": {"jobId": job_id}}), 202
+
+
+@app.route("/api/compose/status/<job_id>", methods=["GET"])
+def compose_job_status(job_id):
+    job = get_compose_job(job_id)
+    if not job:
+        return jsonify({"error": "Compose job not found or server restarted"}), 404
+    return jsonify({"code": "0", "data": job})
 
 
 @app.route("/api/compose", methods=["POST"])
@@ -552,7 +752,8 @@ def generated_audio(filename):
         return jsonify({"error": "File not found"}), 404
     ext = path.suffix.lower()
     mimetype = "audio/mpeg" if ext == ".mp3" else "audio/wav"
-    return send_file(path, mimetype=mimetype, as_attachment=False)
+    should_download = request.args.get("download") == "1"
+    return send_file(path, mimetype=mimetype, as_attachment=should_download, download_name=safe_name)
 
 
 # --- API: Download all as ZIP ---
@@ -607,4 +808,4 @@ def serve(path):
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5001, debug=True)
+    app.run(host="0.0.0.0", port=get_server_port(), debug=True)
