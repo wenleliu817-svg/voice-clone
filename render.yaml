@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: voice-clone
+    runtime: docker
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/status
+    autoDeploy: true
