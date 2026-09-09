@@ -16,7 +16,7 @@ function run() {
       locationProtocol: "https:",
       locationHostname: "wenleliu817-svg.github.io",
     }),
-    "https://voice-clone.onrender.com"
+    "https://voice-clone.wenleliu817.workers.dev"
   );
 
   assert.strictEqual(
@@ -45,6 +45,14 @@ function run() {
     "https://api.example.com/api/clone"
   );
 
+  assert.strictEqual(
+    buildRequestUrl({
+      backendBase: "https://corsproxy.io",
+      path: "/tts_gateway/v2/upload",
+    }),
+    "https://corsproxy.io/?url=https%3A%2F%2Fopenapi.youdao.com%2Ftts_gateway%2Fv2%2Fupload"
+  );
+
   assert.throws(
     () => buildRequestUrl({
       backendBase: "https://openapi.youdao.com",
@@ -63,11 +71,11 @@ function run() {
 
   assert.strictEqual(
     buildMediaUrl({
-      backendBase: "https://api.example.com",
+      backendBase: "https://corsproxy.io",
       mediaUrl: "https://cdn.example.com/audio.wav",
       filename: "audio_1.wav",
     }),
-    "https://api.example.com/api/download?url=https%3A%2F%2Fcdn.example.com%2Faudio.wav&filename=audio_1.wav"
+    "https://cdn.example.com/audio.wav"
   );
 
   assert.strictEqual(

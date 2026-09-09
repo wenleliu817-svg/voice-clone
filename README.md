@@ -17,9 +17,16 @@
 2. `POST /tts_gateway/v2/synthesis_async` 提交文本并取得 `taskId`
 3. `POST /tts_gateway/v2/get_progress` 查询合成进度
 4. `POST /tts_gateway/v2/get_result` 取得结果地址
-5. 后端立即下载并保存结果，避免官方 `mediaUrl` 一天后过期
+5. 前端直接播放或下载官方返回的 `mediaUrl`
 
-所有有道接口请求都由 Flask 后端签名。App Secret 不写入浏览器存储，也不会出现在 URL 中。
+GitHub Pages 体验页在浏览器中生成 v4 签名，并通过仓库内的 Cloudflare Worker 转发到有道接口。App Secret 不写入浏览器存储，只在本次请求中使用。
+
+Worker 只允许转发这 4 个有道接口路径，不是开放式代理：
+
+- `/tts_gateway/v2/upload`
+- `/tts_gateway/v2/synthesis_async`
+- `/tts_gateway/v2/get_progress`
+- `/tts_gateway/v2/get_result`
 
 ## 本地运行
 
@@ -41,11 +48,22 @@ node tests/transport.test.js
 
 ## 部署
 
-- `docs/`：GitHub Pages 静态前端
-- `backend/`：Render 等支持 Docker/Python 的服务端
-- `backend/frontend_build/`：后端同域访问时使用的前端副本
+- `docs/`：GitHub Pages 静态前端，发布后即可打开体验
+- `worker.js`：Cloudflare Worker 代理
+- `wrangler.toml`：Worker 部署配置
+- `backend/`：可选的旧版 Flask 服务端
 
-GitHub Pages 页面会自动连接 `https://voice-clone.onrender.com`；本地文件连接 `http://localhost:5001`；从后端域名访问时使用当前域名。
+GitHub Pages 页面默认请求：
+
+```text
+https://voice-clone.wenleliu817.workers.dev
+```
+
+Cloudflare 中重新部署仓库后，可先访问 `/api/status` 验证 Worker：
+
+```json
+{"ok":true}
+```
 
 ## 官方文档
 
