@@ -26,9 +26,6 @@ let API_BASE = TRANSPORT.resolveBackendBase({
   locationHostname: window.location.hostname,
   locationOrigin: window.location.origin,
 });
-const CORS_PROXY_KEY = new URLSearchParams(window.location.search).get("corsProxyKey")
-  || localStorage.getItem("voice_clone_corsproxy_key")
-  || "";
 let selectedLanguage = localStorage.getItem(STORAGE_KEYS.language) || "zh-CHS";
 let selectedModel = localStorage.getItem(STORAGE_KEYS.model) || "pro";
 let audioFile = null;
@@ -50,7 +47,7 @@ function showMessage(message, type = "error") {
 }
 
 async function requestJson(path, options = {}, label = "请求", timeoutMs = 30000) {
-  const url = TRANSPORT.buildRequestUrl({ backendBase: API_BASE, path, corsProxyKey: CORS_PROXY_KEY });
+  const url = TRANSPORT.buildRequestUrl({ backendBase: API_BASE, path });
   try {
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), timeoutMs);
