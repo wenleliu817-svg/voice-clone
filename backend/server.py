@@ -5,6 +5,7 @@ import threading
 import time
 import uuid
 import zipfile
+from urllib.parse import urlparse
 from io import BytesIO
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -45,6 +46,8 @@ LANGUAGE_LOOKUP.update({v.lower(): k for k, v in LANGUAGE_OPTIONS.items()})
 LANGUAGE_LOOKUP.update({"cn": "zh-CHS", "zh": "zh-CHS", "zh-cn": "zh-CHS", "chinese": "zh-CHS", "english": "en", "en-us": "en"})
 
 MODEL_OPTIONS = {"lite", "pro"}
+ALLOWED_AUDIO_EXTENSIONS = {".wav"}
+MAX_REFERENCE_AUDIO_BYTES = 25 * 1024 * 1024
 DEFAULT_COMPOSE_TIMEOUT_SECONDS = 300
 DEFAULT_COMPOSE_POLL_INTERVAL_SECONDS = 3
 COMPOSE_JOBS = {}
@@ -74,6 +77,18 @@ def generate_sign_v4(app_key, app_secret):
     return salt, curtime, sign
 
 
+def build_signed_payload(app_key, app_secret, **values):
+    salt, curtime, sign = generate_sign_v4(app_key, app_secret)
+    return {
+        "appKey": app_key,
+        "curtime": curtime,
+        "salt": salt,
+        "sign": sign,
+        "signType": "v4",
+        **values,
+    }
+
+
 def normalize_language(value):
     key = str(value or "").strip().lower()
     if not key:
@@ -84,6 +99,35 @@ def normalize_language(value):
 def language_label(value):
     code = normalize_language(value)
     return LANGUAGE_OPTIONS.get(code, code or "未知语种")
+
+
+def validate_reference_audio(audio):
+    """Validate the reference sample before sending it to Youdao."""
+    if not audio or not str(audio.filename or "").lower().endswith(tuple(ALLOWED_AUDIO_EXTENSIONS)):
+        return "参考音频必须是 .wav 文件"
+    stream = getattr(audio, "stream", None)
+    if stream is not None:
+        try:
+            current = stream.tell()
+            stream.seek(0, 2)
+            size = stream.tell()
+            stream.seek(current)
+            if size > MAX_REFERENCE_AUDIO_BYTES:
+                return "参考音频不能超过 25MB"
+        except (AttributeError, OSError):
+            pass
+    return ""
+
+
+def is_allowed_media_url(value):
+    try:
+        parsed = urlparse(str(value or "").strip())
+        hostname = (parsed.hostname or "").lower().rstrip(".")
+        if parsed.scheme != "https" or not hostname:
+            return False
+        return hostname == "youdao.com" or hostname.endswith(".youdao.com") or hostname == "ydstatic.com" or hostname.endswith(".ydstatic.com")
+    except ValueError:
+        return False
 
 
 def is_lite_language(code):
@@ -240,15 +284,7 @@ def wait_for_task_completion(app_key, app_secret, task_id, timeout_seconds=DEFAU
     last_progress = None
 
     while time.time() < deadline:
-        salt, curtime, sign = generate_sign_v4(app_key, app_secret)
-        payload = {
-            "appKey": app_key,
-            "curtime": curtime,
-            "salt": salt,
-            "sign": sign,
-            "signType": "v4",
-            "taskId": task_id,
-        }
+        payload = build_signed_payload(app_key, app_secret, taskId=task_id)
         progress_result = api_json_post(URI_PROGRESS, payload)
         last_progress = progress_result
         if callable(on_progress):
@@ -260,7 +296,10 @@ def wait_for_task_completion(app_key, app_secret, task_id, timeout_seconds=DEFAU
             data = progress_result.get("data") or {}
             status = str(data.get("status") or "").upper()
             if status in {"SUCCESS", "PARTIAL_SUCCESS"}:
-                result_payload = api_json_post(URI_RESULT, payload)
+                result_payload = api_json_post(
+                    URI_RESULT,
+                    build_signed_payload(app_key, app_secret, taskId=task_id),
+                )
                 if str(result_payload.get("code")) == "0":
                     return {
                         "code": "0",
@@ -377,7 +416,7 @@ def run_compose_job(job_id, params, audio_bytes, audio_filename):
                     content_type = (resp.headers.get("Content-Type") or "audio/wav").split(";")[0].strip()
                     filename, saved_media_url = save_generated_audio(audio_bytes_result, content_type, index)
                     results.append({
-                        "qIndex": index,
+                        "qIndex": int(item.get("qIndex", index)),
                         "filename": filename,
                         "mediaUrl": saved_media_url,
                         "contentType": content_type,
@@ -418,6 +457,9 @@ def clone_voice():
         return jsonify({"error": "Missing appKey or appSecret"}), 400
     if not audio:
         return jsonify({"error": "Missing audio file"}), 400
+    audio_error = validate_reference_audio(audio)
+    if audio_error:
+        return jsonify({"error": audio_error}), 400
 
     emotion_audio = request.files.get("emotionAudioFile")
     salt, curtime, sign = generate_sign_v4(app_key, app_secret)
@@ -458,6 +500,9 @@ def start_compose_job():
         return jsonify({"error": "Missing text"}), 400
     if not audio:
         return jsonify({"error": "Missing audio file"}), 400
+    audio_error = validate_reference_audio(audio)
+    if audio_error:
+        return jsonify({"error": audio_error}), 400
     if model not in MODEL_OPTIONS:
         return jsonify({"error": "Invalid model"}), 400
     if model == "lite" and language and not is_lite_language(language):
@@ -525,6 +570,9 @@ def compose():
     if not voice_id:
         if not audio:
             return jsonify({"error": "Missing audio file"}), 400
+        audio_error = validate_reference_audio(audio)
+        if audio_error:
+            return jsonify({"error": audio_error}), 400
         clone_result = upload_voice_clone(
             app_key=app_key,
             app_secret=app_secret,
@@ -735,6 +783,8 @@ def download_audio():
     filename = request.args.get("filename", "audio.wav").strip()
     if not url:
         return jsonify({"error": "Missing url"}), 400
+    if not is_allowed_media_url(url):
+        return jsonify({"error": "只允许代理有道官方音频地址"}), 400
     try:
         req = Request(url, method="GET")
         with urlopen(req, timeout=120) as resp:
@@ -809,4 +859,8 @@ def serve(path):
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=get_server_port(), debug=True)
+    app.run(
+        host="0.0.0.0",
+        port=get_server_port(),
+        debug=os.environ.get("FLASK_DEBUG") == "1",
+    )

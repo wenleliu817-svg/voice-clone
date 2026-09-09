@@ -1,72 +1,53 @@
-# 有道声音克隆 · 一键合成
+# Voice Foundry · 有道声音复刻
 
-基于有道 AI 开放平台「大模型声音复刻」和「大模型语音合成」的前端工具，支持语种选择、模型选择、参考音频输入与一键文本合成。
+一个面向客户直接使用的有道智云声音复刻与语音合成网页。用户填写 AppID 和 App Secret、上传参考 WAV、输入文本并选择模型与语种后，服务会自动完成音色复刻、异步语音合成、结果播放和下载。
 
-## 功能
+## 使用前准备
 
-1. **一键生成** — 上传参考 .wav 音频并输入文本，自动完成克隆和合成
-2. **在线预览** — 合成后可直接页面内播放
-3. **下载结果** — 支持单条下载
+请在[有道智云控制台](https://ai.youdao.com/appmgr.s)创建 API 应用，并同时开通：
 
-## 快速开始
+- 大模型声音复刻
+- 大模型语音合成
 
-### 本地运行
+参考音频须为 WAV、单声道、16kHz 或 24kHz，建议 5–10 秒清晰人声，不要包含背景音乐或多人声音。
 
-```bash
-# 1. 克隆仓库
-git clone https://github.com/<你的用户名>/youdao-voice-clone.git
-cd youdao-voice-clone
+## API 流程
 
-# 2. 安装依赖
-cd backend
-pip install -r requirements.txt
+1. `POST /tts_gateway/v2/upload` 上传参考音频并取得 `voiceId`
+2. `POST /tts_gateway/v2/synthesis_async` 提交文本并取得 `taskId`
+3. `POST /tts_gateway/v2/get_progress` 查询合成进度
+4. `POST /tts_gateway/v2/get_result` 取得结果地址
+5. 后端立即下载并保存结果，避免官方 `mediaUrl` 一天后过期
 
-# 3. 启动服务
-cd backend
-python server.py
+所有有道接口请求都由 Flask 后端签名。App Secret 不写入浏览器存储，也不会出现在 URL 中。
 
-# 4. 浏览器打开 http://localhost:5001
-```
-
-### Docker 运行
+## 本地运行
 
 ```bash
-docker build -t youdao-voice-clone .
-docker run -p 5001:5001 youdao-voice-clone
+cd backend
+python3 -m pip install -r requirements.txt
+python3 server.py
 ```
 
-## 有道开放平台配置
+打开 `http://localhost:5001`。
 
-1. 注册并登录 [有道 AI 开放平台](https://ai.youdao.com)
-2. 创建应用，开通「大模型声音复刻」和「大模型语音合成」服务
-3. 在页面中填入 App Key 和 App Secret 即可使用
-4. 静态页面默认连接内置后端，点击一次就会自动完成参考音频克隆和文本合成
+## 测试
 
-## 文件结构
-
-```
-.
-├── backend/
-│   ├── server.py              # Flask 后端
-│   ├── requirements.txt
-│   ├── Dockerfile
-│   ├── frontend_build/        # 前端静态文件
-│   │   ├── index.html
-│   │   ├── styles.css
-│   │   └── app.js
-│   └── uploads/
-├── README.md
-└── .gitignore
+```bash
+python3 -m unittest discover -s tests -v
+node tests/docs_app_flow.test.js
+node tests/transport.test.js
 ```
 
-## 技术栈
+## 部署
 
-- **前端**: 原生 HTML/CSS/JS，无需打包
-- **后端**: Python + Flask
-- **API**: 有道声音复刻 + 语音合成 API
-- **语种/模型**: `lite` 支持中文/英文，`pro` 支持更多语种
-- **外网访问**: GitHub Pages 页面地址保持不变，接口由后端转发
+- `docs/`：GitHub Pages 静态前端
+- `backend/`：Render 等支持 Docker/Python 的服务端
+- `backend/frontend_build/`：后端同域访问时使用的前端副本
 
-## License
+GitHub Pages 页面会自动连接 `https://voice-clone.onrender.com`；本地文件连接 `http://localhost:5001`；从后端域名访问时使用当前域名。
 
-MIT
+## 官方文档
+
+- [大模型语音复刻与同步合成](https://ai.youdao.com/DOCSIRMA/html/tts/api/dmxyyfkhc/index.html)
+- [大模型语音复刻与异步批量合成](https://ai.youdao.com/DOCSIRMA/html/tts/api/dmxyyfkybplhc/)

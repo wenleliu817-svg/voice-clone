@@ -164,6 +164,25 @@ class ComposeFlowTest(unittest.TestCase):
         self.assertEqual(fields["sampleRate"], "16000")
         self.assertEqual(fields["channel"], "1")
 
+    def test_download_proxy_rejects_non_youdao_urls(self):
+        response = self.client.get("/api/download?url=https://example.com/audio.wav&filename=x.wav")
+        self.assertEqual(response.status_code, 400)
+
+    def test_compose_rejects_non_wav_reference_audio(self):
+        response = self.client.post(
+            "/api/compose/start",
+            data={
+                "appKey": "app-key",
+                "appSecret": "app-secret",
+                "text": "Hello world",
+                "language": "en",
+                "model": "pro",
+                "audio": (io.BytesIO(b"fake mp3"), "sample.mp3"),
+            },
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 400)
+
     def test_wait_for_task_retries_pending_result_after_success(self):
         progress = {"code": "0", "data": {"status": "SUCCESS"}}
         pending_result = {"code": "207", "message": "Result is not ready"}
@@ -176,6 +195,25 @@ class ComposeFlowTest(unittest.TestCase):
         self.assertEqual(result["code"], "0")
         self.assertEqual(len(result["data"]), 1)
         self.assertEqual(mock_post.call_count, 4)
+        calls = mock_post.call_args_list
+        self.assertNotEqual(calls[0].args[1]["salt"], calls[1].args[1]["salt"])
+
+    def test_async_result_keeps_official_q_index(self):
+        class FakeAudioResponse:
+            headers = {"Content-Type": "audio/wav"}
+            def __enter__(self): return self
+            def __exit__(self, exc_type, exc, tb): return False
+            def read(self): return b"RIFF...."
+
+        job_id = "job-q-index"
+        server.COMPOSE_JOBS[job_id] = {"jobId": job_id, "stage": "received", "progress": 5, "message": "", "voiceId": "", "result": None, "error": ""}
+        params = {"app_key": "app-key", "app_secret": "app-secret", "text": "Hello", "language": "en", "model": "pro", "voice_name": "OneShot", "audio_format": "wav", "volume": "1", "speed": "1"}
+        with patch("backend.server.upload_voice_clone", return_value={"code": "0", "data": {"voiceId": "voice-1"}}), \
+             patch("backend.server.submit_synthesis", return_value={"code": "0", "data": {"taskId": "task-1"}}), \
+             patch("backend.server.wait_for_task_completion", return_value={"code": "0", "data": [{"mediaUrl": "https://cdn.example/audio.wav", "qIndex": 7}]}), \
+             patch("backend.server.urlopen", return_value=FakeAudioResponse()):
+            server.run_compose_job(job_id, params, b"fake wav", "sample.wav")
+        self.assertEqual(server.get_compose_job(job_id)["result"]["results"][0]["qIndex"], 7)
 
 
 if __name__ == "__main__":

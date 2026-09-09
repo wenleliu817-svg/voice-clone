@@ -1,143 +1,99 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>有道声音克隆 · 一键合成</title>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#07111f">
+  <title>Voice Foundry · 有道声音复刻</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-
-  <div class="container">
-    <header>
-      <h1><i class="fa-solid fa-microphone-lines"></i> 有道声音克隆</h1>
-      <p class="subtitle">参考音频 + 文本，一次完成克隆与合成</p>
+  <div class="ambient ambient-one"></div>
+  <div class="ambient ambient-two"></div>
+  <main class="shell">
+    <header class="masthead">
+      <div class="eyebrow"><span class="pulse"></span> YOUDAO VOICE FOUNDRY</div>
+      <div class="masthead-row">
+        <div>
+          <h1>把一段声音，<em>变成你的声音。</em></h1>
+          <p class="lede">上传一段清晰参考音频，输入文本，即可调用有道智云大模型生成新的语音。</p>
+        </div>
+        <div class="header-mark" aria-hidden="true"><span>声</span><small>LAB<br>01</small></div>
+      </div>
+      <div class="trust-line"><span>官方 API 代理</span><span>·</span><span>App Secret 仅本次请求使用</span><span>·</span><span>音频结果可播放下载</span></div>
     </header>
 
-    <!-- Step 1: Credentials -->
-    <section class="card">
-      <div class="card-header">
-        <span class="step-badge">1</span>
-        <h2>API 凭证</h2>
+    <div id="message-region" aria-live="polite"></div>
+
+    <section class="workspace-grid">
+      <div class="main-column">
+        <section class="panel panel-credentials">
+          <div class="panel-heading"><span class="index">01</span><div><h2>连接你的应用</h2><p>从有道智云控制台复制 AppID 与 App Secret</p></div><span class="secure-pill">安全连接</span></div>
+          <div class="field-grid two">
+            <label class="field"><span>AppID</span><input id="appKey" type="text" autocomplete="off" placeholder="例如：a1b2c3d4…"><small>有道控制台 · 应用管理</small></label>
+            <label class="field"><span>App Secret</span><div class="secret-input"><input id="appSecret" type="password" autocomplete="new-password" placeholder="输入应用密钥"><button id="toggle-secret" type="button" aria-label="显示或隐藏密钥">显示</button></div><small>不会保存到浏览器</small></label>
+          </div>
+        </section>
+
+        <section class="panel panel-reference">
+          <div class="panel-heading"><span class="index">02</span><div><h2>放入参考音频</h2><p>让模型学习你的音色与节奏</p></div></div>
+          <div id="audio-dropzone" class="dropzone" tabindex="0" role="button" aria-label="上传参考音频">
+            <div class="drop-icon">↗</div><strong>拖入 WAV 音频</strong><span>或 <button id="choose-audio" type="button" class="text-button">从设备选择</button></span>
+            <input id="audioFile" type="file" accept=".wav,audio/wav" hidden>
+            <small>单声道 · 16k/24k · 建议 5–10 秒 · 最大 25MB</small>
+          </div>
+          <div id="audio-preview" class="audio-preview hidden"><div class="audio-meta"><span class="audio-badge">WAV</span><div><strong id="audio-filename">—</strong><small id="audio-details">参考音频已就绪</small></div><button id="clear-audio" class="icon-button" type="button" aria-label="移除音频">×</button></div><audio id="reference-player" controls></audio></div>
+          <p id="audio-status" class="field-note"></p>
+        </section>
+
+        <section class="panel panel-script">
+          <div class="panel-heading"><span class="index">03</span><div><h2>写下要说的话</h2><p>一整段文本会生成一条连续音频</p></div><button id="sample-text" type="button" class="ghost-button">填入示例</button></div>
+          <label class="field"><span class="sr-only">合成文本</span><textarea id="composeText" rows="7" maxlength="2000" placeholder="例如：欢迎来到 Voice Foundry，今天也要保持好奇。"></textarea><div class="textarea-footer"><small>建议使用自然、完整的句子</small><span><b id="char-count">0</b> / 2000</span></div></label>
+          <div class="field-grid two settings-grid">
+            <label class="field"><span>模型</span><select id="model-select"><option value="pro">pro · 多语种高质量</option><option value="lite">lite · 中文/英文更快</option></select></label>
+            <label class="field"><span>语种</span><select id="language-select"></select></label>
+          </div>
+          <p id="model-hint" class="field-note"></p>
+        </section>
+
+        <section class="panel panel-output">
+          <div class="panel-heading"><span class="index">04</span><div><h2>输出设置</h2><p>选择音频格式与表达速度</p></div></div>
+          <div class="field-grid three">
+            <label class="field"><span>格式</span><select id="format"><option value="wav">WAV · 无损</option><option value="mp3">MP3 · 轻量</option></select></label>
+            <label class="field"><span>语速 <i id="speed-value">1.0×</i></span><input id="speed" type="range" min="0.5" max="2" step="0.1" value="1"><div class="range-labels"><small>慢</small><small>快</small></div></label>
+            <label class="field"><span>音量 <i id="volume-value">1.0×</i></span><input id="volume" type="range" min="0.5" max="2" step="0.1" value="1"><div class="range-labels"><small>柔和</small><small>响亮</small></div></label>
+          </div>
+          <button id="btn-synthesize" class="primary-button" type="button"><span class="button-icon">✦</span><span>开始生成声音</span><span class="button-arrow">→</span></button>
+          <button id="reset-form" class="reset-button" type="button">清空本次输入</button>
+        </section>
       </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label>App Key</label>
-          <input type="text" id="appKey" placeholder="输入有道 App Key">
-        </div>
-        <div class="form-group">
-          <label>App Secret</label>
-          <input type="password" id="appSecret" placeholder="输入有道 App Secret">
-          <button type="button" class="toggle-pw" onclick="toggleSecret()">
-            <i class="fa-regular fa-eye" id="eye-icon"></i>
-          </button>
-        </div>
-      </div>
+
+      <aside class="side-column">
+        <section id="progress-card" class="panel progress-panel hidden" aria-live="polite">
+          <div class="side-heading"><span>实时状态</span><strong id="progress-percent">0%</strong></div>
+          <div class="progress-track"><span id="progress-bar"></span></div>
+          <ol id="progress-steps" class="progress-list">
+            <li data-stage="received"><span>01</span><div><b>任务已接收</b><small>等待处理</small></div></li>
+            <li data-stage="cloning"><span>02</span><div><b>复刻参考音色</b><small>建立你的 voiceId</small></div></li>
+            <li data-stage="clone_complete"><span>03</span><div><b>音色准备完成</b><small>开始提交文本</small></div></li>
+            <li data-stage="synthesizing"><span>04</span><div><b>生成音频</b><small>等待有道返回结果</small></div></li>
+            <li data-stage="completed"><span>05</span><div><b>可以试听</b><small>播放或下载文件</small></div></li>
+          </ol>
+          <p id="progress-message" class="progress-message">准备开始</p>
+        </section>
+
+        <section id="results-card" class="panel results-panel hidden">
+          <div class="side-heading"><span>生成结果</span><span class="result-dot">● 已完成</span></div>
+          <div id="result-meta" class="result-meta"></div>
+          <div id="results-list" class="results-list"></div>
+        </section>
+
+        <section class="panel guide-panel"><div class="side-heading"><span>小提示</span><span>TIP</span></div><p>参考音频越干净，复刻出来的声音越稳定。避免背景音乐、多人说话和明显混响。</p><a href="https://ai.youdao.com/appmgr.s" target="_blank" rel="noreferrer">打开有道应用管理 ↗</a></section>
+      </aside>
     </section>
-
-    <!-- Step 2: Reference Audio -->
-    <section class="card">
-      <div class="card-header">
-        <span class="step-badge">2</span>
-        <h2>参考音频</h2>
-      </div>
-      <div class="upload-zone" id="audio-dropzone">
-        <i class="fa-solid fa-cloud-arrow-up"></i>
-        <p>拖拽 .wav 音频文件到此处，或 <span class="link" onclick="document.getElementById('audioFile').click()">点击选择</span></p>
-        <input type="file" id="audioFile" accept=".wav,audio/wav" hidden>
-        <p class="hint">推荐 5-10 秒清晰人声样本</p>
-      </div>
-      <div id="audio-preview" class="file-preview hidden">
-        <div class="file-info">
-          <i class="fa-solid fa-file-audio file-icon"></i>
-          <span id="audio-filename" class="filename"></span>
-          <button class="btn-icon" onclick="clearAudio()" title="移除"><i class="fa-solid fa-xmark"></i></button>
-        </div>
-      </div>
-      <div id="audio-status" class="field-hint"></div>
-      <div class="form-row settings">
-        <div class="form-group">
-          <label>语种</label>
-          <select id="language-select"></select>
-          <div class="field-hint" id="language-hint"></div>
-        </div>
-        <div class="form-group">
-          <label>模型</label>
-          <select id="model-select">
-            <option value="lite">lite</option>
-            <option value="pro">pro</option>
-          </select>
-          <div class="field-hint" id="model-hint"></div>
-        </div>
-      </div>
-    </section>
-
-    <!-- Step 3: Text -->
-    <section class="card">
-      <div class="card-header">
-        <span class="step-badge">3</span>
-        <h2>合成文本</h2>
-      </div>
-      <div class="form-group">
-        <label>文本</label>
-        <textarea id="composeText" class="input-area" rows="6" placeholder="输入要合成的一整段文本"></textarea>
-        <div class="field-hint">整段文本会作为一条结果生成。</div>
-      </div>
-    </section>
-
-    <!-- Step 4: Settings & Run -->
-    <section class="card">
-      <div class="card-header">
-        <span class="step-badge">4</span>
-        <h2>合成设置</h2>
-      </div>
-      <div class="form-row settings">
-        <div class="form-group">
-          <label>音频格式</label>
-          <select id="format"><option value="wav">WAV</option><option value="mp3">MP3</option></select>
-        </div>
-        <div class="form-group">
-          <label>语速 (0.5 - 2.0)</label>
-          <input type="number" id="speed" min="0.5" max="2.0" step="0.1" value="1.0">
-        </div>
-        <div class="form-group">
-          <label>音量 (0.5 - 2.0)</label>
-          <input type="number" id="volume" min="0.5" max="2.0" step="0.1" value="1.0">
-        </div>
-      </div>
-      <button class="btn btn-primary btn-large" id="btn-synthesize" onclick="startSynthesis()">
-        <i class="fa-solid fa-wand-magic-sparkles"></i> 一键生成
-      </button>
-    </section>
-
-    <section class="card hidden" id="progress-card" aria-live="polite">
-      <div class="card-header">
-        <h2><i class="fa-solid fa-bars-progress"></i> 处理进度</h2>
-        <span id="progress-percent" class="progress-percent">0%</span>
-      </div>
-      <ol class="progress-steps" id="progress-steps">
-        <li data-stage="received"><span class="progress-dot">1</span><span><strong>参考音频已接收</strong><small>等待开始</small></span></li>
-        <li data-stage="cloning"><span class="progress-dot">2</span><span><strong>克隆中</strong><small>正在创建音色</small></span></li>
-        <li data-stage="clone_complete"><span class="progress-dot">3</span><span><strong>克隆完成</strong><small>音色已准备好</small></span></li>
-        <li data-stage="synthesizing"><span class="progress-dot">4</span><span><strong>合成中</strong><small>正在生成音频</small></span></li>
-        <li data-stage="completed"><span class="progress-dot">5</span><span><strong>合成完成</strong><small>可以播放和下载</small></span></li>
-      </ol>
-      <p id="progress-message" class="progress-info">等待开始</p>
-    </section>
-
-    <!-- Step 5: Results -->
-    <section class="card hidden" id="results-card">
-      <div class="card-header">
-        <h2><i class="fa-solid fa-music"></i> 合成结果</h2>
-      </div>
-      <div id="results-list" class="results-list"></div>
-    </section>
-
-  </div>
-
-  <script src="transport.js?v=20260907-1"></script>
-  <script src="app.js?v=20260907-1"></script>
+    <footer>VOICE FOUNDRY / POWERED BY YOUDAO AI CLOUD</footer>
+  </main>
+  <script src="transport.js?v=20260909-1"></script>
+  <script src="app.js?v=20260909-1"></script>
 </body>
 </html>
