@@ -9,6 +9,10 @@ function run() {
   assert.ok(appJs.includes('formData.append("audio", audioFile, audioFile.name);'), "reference audio should be sent");
   assert.ok(indexHtml.includes("AppID") && indexHtml.includes("App Secret"), "credentials should use AppID wording");
   assert.ok(indexHtml.includes("audio/wav") && indexHtml.includes("参考音频"), "page should explain the WAV requirement");
+  assert.ok(appJs.includes("dataBytes"), "reference audio validation should inspect the WAV data chunk");
+  assert.ok(appJs.includes("音频数据不能为空"), "empty WAV files should be rejected before submission");
+  assert.ok(appJs.includes("AbortController"), "network requests should have a timeout instead of hanging forever");
+  assert.ok(appJs.includes("后端服务没有在"), "a stalled backend should show a useful timeout message");
 
   assert.ok(
     !appJs.includes("split(/\\r?\\n/)"),

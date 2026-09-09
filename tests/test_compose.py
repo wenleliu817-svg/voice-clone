@@ -6,6 +6,26 @@ from backend import server
 from backend.server import app
 
 
+def wav_bytes(sample_rate=24000, seconds=1):
+    data = b"\x00\x00" * (sample_rate * seconds)
+    return (
+        b"RIFF"
+        + (36 + len(data)).to_bytes(4, "little")
+        + b"WAVE"
+        + b"fmt "
+        + (16).to_bytes(4, "little")
+        + (1).to_bytes(2, "little")
+        + (1).to_bytes(2, "little")
+        + sample_rate.to_bytes(4, "little")
+        + (sample_rate * 2).to_bytes(4, "little")
+        + (2).to_bytes(2, "little")
+        + (16).to_bytes(2, "little")
+        + b"data"
+        + len(data).to_bytes(4, "little")
+        + data
+    )
+
+
 class ComposeFlowTest(unittest.TestCase):
     def setUp(self):
         self.client = app.test_client()
@@ -24,7 +44,7 @@ class ComposeFlowTest(unittest.TestCase):
                     "text": "Hello world",
                     "language": "en",
                     "model": "pro",
-                    "audio": (io.BytesIO(b"fake wav"), "sample.wav"),
+                    "audio": (io.BytesIO(wav_bytes()), "sample.wav"),
                 },
                 content_type="multipart/form-data",
             )
@@ -48,7 +68,7 @@ class ComposeFlowTest(unittest.TestCase):
                     "text": "Hello world\nSecond line",
                     "language": "en",
                     "model": "pro",
-                    "audio": (io.BytesIO(b"fake wav"), "sample.wav"),
+                    "audio": (io.BytesIO(wav_bytes()), "sample.wav"),
                 },
                 content_type="multipart/form-data",
             )
@@ -70,7 +90,7 @@ class ComposeFlowTest(unittest.TestCase):
                     "text": "Hello world",
                     "language": "en",
                     "model": "pro",
-                    "audio": (io.BytesIO(b"fake wav"), "sample.wav"),
+                    "audio": (io.BytesIO(wav_bytes()), "sample.wav"),
                 },
                 content_type="multipart/form-data",
             )
@@ -182,6 +202,37 @@ class ComposeFlowTest(unittest.TestCase):
             content_type="multipart/form-data",
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_compose_rejects_empty_wav_reference_audio(self):
+        empty_wav = (
+            b"RIFF"
+            + (36).to_bytes(4, "little")
+            + b"WAVE"
+            + b"fmt "
+            + (16).to_bytes(4, "little")
+            + (1).to_bytes(2, "little")
+            + (1).to_bytes(2, "little")
+            + (24000).to_bytes(4, "little")
+            + (48000).to_bytes(4, "little")
+            + (2).to_bytes(2, "little")
+            + (16).to_bytes(2, "little")
+            + b"data"
+            + (0).to_bytes(4, "little")
+        )
+        response = self.client.post(
+            "/api/compose/start",
+            data={
+                "appKey": "app-key",
+                "appSecret": "app-secret",
+                "text": "Hello world",
+                "language": "en",
+                "model": "pro",
+                "audio": (io.BytesIO(empty_wav), "empty.wav"),
+            },
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("音频数据不能为空", response.get_json()["error"])
 
     def test_wait_for_task_retries_pending_result_after_success(self):
         progress = {"code": "0", "data": {"status": "SUCCESS"}}

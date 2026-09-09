@@ -101,22 +101,84 @@ def language_label(value):
     return LANGUAGE_OPTIONS.get(code, code or "未知语种")
 
 
-def validate_reference_audio(audio):
-    """Validate the reference sample before sending it to Youdao."""
+def parse_wav_info(audio_bytes):
+    data = bytes(audio_bytes or b"")
+    if len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        raise ValueError("文件不是有效的 WAV 音频")
+
+    fmt = None
+    data_bytes = 0
+    offset = 12
+    while offset + 8 <= len(data):
+        chunk_id = data[offset:offset + 4]
+        chunk_size = int.from_bytes(data[offset + 4:offset + 8], "little")
+        chunk_start = offset + 8
+        chunk_end = chunk_start + chunk_size
+        if chunk_id == b"fmt ":
+            if chunk_size < 16 or chunk_end > len(data):
+                raise ValueError("WAV 音频格式块不完整")
+            fmt = {
+                "audio_format": int.from_bytes(data[chunk_start:chunk_start + 2], "little"),
+                "channels": int.from_bytes(data[chunk_start + 2:chunk_start + 4], "little"),
+                "sample_rate": int.from_bytes(data[chunk_start + 4:chunk_start + 8], "little"),
+                "bits_per_sample": int.from_bytes(data[chunk_start + 14:chunk_start + 16], "little"),
+            }
+        elif chunk_id == b"data":
+            data_bytes = min(chunk_size, max(0, len(data) - chunk_start))
+            break
+        offset = chunk_end + (chunk_size % 2)
+
+    if not fmt:
+        raise ValueError("WAV 音频缺少格式信息")
+    if data_bytes <= 0:
+        raise ValueError("音频数据不能为空，请上传包含实际声音的 WAV 文件")
+    if fmt["channels"] != 1:
+        raise ValueError("参考音频必须是单声道，请先转换后再上传")
+    if fmt["sample_rate"] not in {16000, 24000}:
+        raise ValueError("参考音频采样率必须是 16kHz 或 24kHz")
+    bytes_per_sample = max(1, fmt["channels"] * max(1, fmt["bits_per_sample"]) // 8)
+    duration_seconds = data_bytes / (fmt["sample_rate"] * bytes_per_sample)
+    if duration_seconds <= 0:
+        raise ValueError("音频时长必须大于 0 秒")
+    return {
+        **fmt,
+        "data_bytes": data_bytes,
+        "duration_seconds": duration_seconds,
+    }
+
+
+def inspect_reference_audio(audio):
     if not audio or not str(audio.filename or "").lower().endswith(tuple(ALLOWED_AUDIO_EXTENSIONS)):
-        return "参考音频必须是 .wav 文件"
+        return "参考音频必须是 .wav 文件", None
     stream = getattr(audio, "stream", None)
-    if stream is not None:
-        try:
-            current = stream.tell()
-            stream.seek(0, 2)
-            size = stream.tell()
+    if stream is None:
+        return "无法读取参考音频", None
+    current = 0
+    try:
+        current = stream.tell()
+        stream.seek(0, 2)
+        size = stream.tell()
+        if size > MAX_REFERENCE_AUDIO_BYTES:
             stream.seek(current)
-            if size > MAX_REFERENCE_AUDIO_BYTES:
-                return "参考音频不能超过 25MB"
+            return "参考音频不能超过 25MB", None
+        stream.seek(0)
+        data = stream.read()
+        stream.seek(current)
+        return "", parse_wav_info(data)
+    except (AttributeError, OSError) as exc:
+        return f"无法读取参考音频：{exc}", None
+    except ValueError as exc:
+        try:
+            stream.seek(current)
         except (AttributeError, OSError):
             pass
-    return ""
+        return str(exc), None
+
+
+def validate_reference_audio(audio):
+    """Validate the reference sample before sending it to Youdao."""
+    error, _ = inspect_reference_audio(audio)
+    return error
 
 
 def is_allowed_media_url(value):
@@ -340,7 +402,7 @@ def run_compose_job(job_id, params, audio_bytes, audio_filename):
             app_secret=params["app_secret"],
             voice_name=params["voice_name"],
             model=params["model"],
-            sample_rate="16000",
+            sample_rate=params.get("sample_rate", "16000"),
             channel="1",
             audio=audio,
         )
@@ -457,7 +519,7 @@ def clone_voice():
         return jsonify({"error": "Missing appKey or appSecret"}), 400
     if not audio:
         return jsonify({"error": "Missing audio file"}), 400
-    audio_error = validate_reference_audio(audio)
+    audio_error, audio_info = inspect_reference_audio(audio)
     if audio_error:
         return jsonify({"error": audio_error}), 400
 
@@ -471,7 +533,7 @@ def clone_voice():
         "signType": "v4",
         "name": voice_name[:50],
         "model": model,
-        "sampleRate": sample_rate,
+        "sampleRate": str(audio_info["sample_rate"]),
         "channel": channel,
     }
     files = {"audioFile": (secure_filename(audio.filename), audio.read())}
@@ -500,7 +562,7 @@ def start_compose_job():
         return jsonify({"error": "Missing text"}), 400
     if not audio:
         return jsonify({"error": "Missing audio file"}), 400
-    audio_error = validate_reference_audio(audio)
+    audio_error, audio_info = inspect_reference_audio(audio)
     if audio_error:
         return jsonify({"error": audio_error}), 400
     if model not in MODEL_OPTIONS:
@@ -528,6 +590,7 @@ def start_compose_job():
         "audio_format": audio_format,
         "volume": volume,
         "speed": speed,
+        "sample_rate": str(audio_info["sample_rate"]),
     }
     worker = threading.Thread(
         target=run_compose_job,
@@ -570,7 +633,7 @@ def compose():
     if not voice_id:
         if not audio:
             return jsonify({"error": "Missing audio file"}), 400
-        audio_error = validate_reference_audio(audio)
+        audio_error, audio_info = inspect_reference_audio(audio)
         if audio_error:
             return jsonify({"error": audio_error}), 400
         clone_result = upload_voice_clone(
@@ -578,7 +641,7 @@ def compose():
             app_secret=app_secret,
             voice_name=voice_name,
             model=model,
-            sample_rate="16000",
+            sample_rate=str(audio_info["sample_rate"]),
             channel="1",
             audio=audio,
         )

@@ -12,4 +12,4 @@ COPY backend/frontend_build/ ./frontend_build/
 
 EXPOSE 5001
 
-CMD ["python", "server.py"]
+CMD ["sh", "-c", "exec gunicorn --bind 0.0.0.0:${PORT:-5001} --workers 1 --threads 4 --timeout 0 server:app"]

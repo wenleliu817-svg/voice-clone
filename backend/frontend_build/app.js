@@ -61,25 +61,49 @@ async function requestJson(path, options = {}, label = "请求") {
 }
 
 function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function formatDuration(seconds) {
+  const wholeSeconds = Math.max(0, Math.round(Number(seconds) || 0));
+  const minutes = Math.floor(wholeSeconds / 60);
+  return `${minutes}:${String(wholeSeconds % 60).padStart(2, "0")}`;
+}
+
 async function readWavInfo(file) {
-  const buffer = await file.slice(0, 256).arrayBuffer();
+  const buffer = await file.arrayBuffer();
   const view = new DataView(buffer);
   const text = (offset, length) => Array.from({ length }, (_, i) => String.fromCharCode(view.getUint8(offset + i))).join("");
   if (buffer.byteLength < 44 || text(0, 4) !== "RIFF" || text(8, 4) !== "WAVE") throw new Error("文件不是有效的 WAV 音频");
+  let format = null;
+  let dataBytes = 0;
   let offset = 12;
   while (offset + 8 <= buffer.byteLength) {
     const chunk = text(offset, 4);
     const size = view.getUint32(offset + 4, true);
     if (chunk === "fmt " && offset + 16 <= buffer.byteLength) {
-      return { channels: view.getUint16(offset + 10, true), sampleRate: view.getUint32(offset + 12, true) };
+      format = {
+        channels: view.getUint16(offset + 10, true),
+        sampleRate: view.getUint32(offset + 12, true),
+        bitsPerSample: view.getUint16(offset + 22, true),
+      };
+    }
+    if (chunk === "data") {
+      dataBytes = Math.min(size, Math.max(0, buffer.byteLength - offset - 8));
+      break;
     }
     offset += 8 + size + (size % 2);
   }
-  throw new Error("无法读取 WAV 音频参数");
+  if (!format) throw new Error("无法读取 WAV 音频参数");
+  if (dataBytes <= 0) throw new Error("音频数据不能为空，请上传包含实际声音的 WAV 文件");
+  if (format.channels !== 1) throw new Error("参考音频必须是单声道，请先转换后再上传");
+  if (![16000, 24000].includes(format.sampleRate)) throw new Error("参考音频采样率必须是 16kHz 或 24kHz");
+  const bytesPerSample = Math.max(1, format.channels * Math.max(1, format.bitsPerSample) / 8);
+  const durationSeconds = dataBytes / (format.sampleRate * bytesPerSample);
+  if (durationSeconds <= 0) throw new Error("音频时长必须大于 0 秒");
+  return { ...format, dataBytes, durationSeconds };
 }
 
 async function handleAudio(file) {
@@ -100,7 +124,7 @@ async function handleAudio(file) {
     audioFile = file;
     referenceAudioUrl = URL.createObjectURL(file);
     $("audio-filename").textContent = file.name;
-    $("audio-details").textContent = `${formatBytes(file.size)} · 单声道 · ${info.sampleRate / 1000}kHz`;
+    $("audio-details").textContent = `${formatBytes(file.size)} · 单声道 · ${info.sampleRate / 1000}kHz · ${formatDuration(info.durationSeconds)}`;
     $("reference-player").src = referenceAudioUrl;
     $("audio-dropzone").classList.add("hidden");
     $("audio-preview").classList.remove("hidden");
@@ -242,7 +266,7 @@ async function startSynthesis() {
   $("results-card").classList.add("hidden");
   $("btn-synthesize").disabled = true;
   $("btn-synthesize").querySelector("span:nth-child(2)").textContent = "正在生成…";
-  setProgressStage("received", "正在安全提交本次合成任务…", 5);
+  setProgressStage("received", "正在连接后端服务并提交任务…", 5);
   try {
     const formData = new FormData();
     formData.append("appKey", appKey);
