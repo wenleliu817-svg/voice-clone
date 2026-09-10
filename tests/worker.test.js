@@ -25,6 +25,13 @@ async function run() {
     assert.match(response.headers.get("content-type"), /audio\/wav/);
     assert.match(response.headers.get("content-disposition"), /result\.wav/);
 
+    const youdaoCdn = await worker.fetch(new Request(
+      "https://voice-clone.example.workers.dev/api/download?url="
+      + encodeURIComponent("https://tts-gateway.nos-jd.163yun.com/online/result.wav")
+      + "&filename=result.wav",
+    ));
+    assert.strictEqual(youdaoCdn.status, 200);
+
     const blocked = await worker.fetch(new Request(
       "https://voice-clone.example.workers.dev/api/download?url="
       + encodeURIComponent("https://example.com/secret"),

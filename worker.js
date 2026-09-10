@@ -8,6 +8,7 @@ const ALLOWED_PATHS = new Set([
 const ALLOWED_MEDIA_HOSTS = new Set([
   "youdao.com",
   "ydstatic.com",
+  "163yun.com",
 ]);
 
 function isAllowedMediaUrl(value) {
