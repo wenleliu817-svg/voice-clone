@@ -5,6 +5,31 @@ const ALLOWED_PATHS = new Set([
   "/tts_gateway/v2/get_progress",
   "/tts_gateway/v2/get_result",
 ]);
+const ALLOWED_MEDIA_HOSTS = new Set([
+  "youdao.com",
+  "ydstatic.com",
+]);
+
+function isAllowedMediaUrl(value) {
+  try {
+    const parsed = new URL(value);
+    const hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
+    return parsed.protocol === "https:"
+      && [...ALLOWED_MEDIA_HOSTS].some(host => hostname === host || hostname.endsWith(`.${host}`));
+  } catch {
+    return false;
+  }
+}
+
+function safeFilename(value) {
+  const fallback = "generated-audio.wav";
+  const filename = String(value || fallback)
+    .replace(/[/\\?%*:|"<>]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+  return filename || fallback;
+}
 
 function corsHeaders(request) {
   const requestedHeaders = request.headers.get("Access-Control-Request-Headers");
@@ -42,6 +67,37 @@ export default {
     }
     if (url.pathname === "/api/status") {
       return jsonResponse({ ok: true }, 200, request);
+    }
+    if (url.pathname === "/api/download") {
+      if (request.method !== "GET") {
+        return jsonResponse({ error: "Method not allowed" }, 405, request);
+      }
+      const mediaUrl = url.searchParams.get("url") || "";
+      if (!isAllowedMediaUrl(mediaUrl)) {
+        return jsonResponse({ error: "Invalid media URL" }, 400, request);
+      }
+      try {
+        const upstream = await fetch(mediaUrl, { redirect: "follow" });
+        if (!upstream.ok) {
+          return jsonResponse({ error: `Media request failed (HTTP ${upstream.status})` }, 502, request);
+        }
+        const responseHeaders = new Headers();
+        Object.entries(corsHeaders(request)).forEach(([key, value]) => responseHeaders.set(key, value));
+        responseHeaders.set("Content-Type", upstream.headers.get("Content-Type") || "audio/wav");
+        const contentLength = upstream.headers.get("Content-Length");
+        if (contentLength) responseHeaders.set("Content-Length", contentLength);
+        const disposition = url.searchParams.get("download") === "1" ? "attachment" : "inline";
+        responseHeaders.set(
+          "Content-Disposition",
+          `${disposition}; filename="${safeFilename(url.searchParams.get("filename"))}"`,
+        );
+        return new Response(upstream.body, {
+          status: 200,
+          headers: responseHeaders,
+        });
+      } catch (error) {
+        return jsonResponse({ error: `Media request failed: ${error.message}` }, 502, request);
+      }
     }
     if (!ALLOWED_PATHS.has(url.pathname)) {
       return jsonResponse({ error: "Not found" }, 404, request);
