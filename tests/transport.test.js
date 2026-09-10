@@ -34,7 +34,7 @@ function run() {
       locationProtocol: "file:",
       locationHostname: "",
     }),
-    "http://localhost:5001"
+    "https://voice-clone.wenleliu817.workers.dev"
   );
 
   assert.strictEqual(

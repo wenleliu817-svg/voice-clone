@@ -13,7 +13,7 @@ function resolveBackendBase({
 } = {}) {
   const query = normalizeBaseUrl(queryBase);
   if (query) return query;
-  if (locationProtocol === "file:") return "http://localhost:5001";
+  if (locationProtocol === "file:") return DEFAULT_BACKEND_ORIGIN;
   if (String(locationHostname || "").endsWith("github.io")) return DEFAULT_BACKEND_ORIGIN;
   return normalizeBaseUrl(locationOrigin) || DEFAULT_BACKEND_ORIGIN;
 }
