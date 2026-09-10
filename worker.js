@@ -32,6 +32,24 @@ function safeFilename(value) {
   return filename || fallback;
 }
 
+function mediaContentType(filename, upstreamType) {
+  const normalized = String(upstreamType || "").split(";")[0].trim().toLowerCase();
+  const extension = String(filename || "").toLowerCase().match(/\.[a-z0-9]+$/)?.[0] || "";
+  const extensionTypes = {
+    ".aac": "audio/aac",
+    ".flac": "audio/flac",
+    ".m4a": "audio/mp4",
+    ".mp3": "audio/mpeg",
+    ".ogg": "audio/ogg",
+    ".wav": "audio/wav",
+    ".webm": "audio/webm",
+  };
+  if (!normalized || normalized === "application/octet-stream" || normalized === "binary/octet-stream") {
+    return extensionTypes[extension] || "audio/wav";
+  }
+  return normalized;
+}
+
 function corsHeaders(request) {
   const requestedHeaders = request.headers.get("Access-Control-Request-Headers");
   return {
@@ -82,15 +100,16 @@ export default {
         if (!upstream.ok) {
           return jsonResponse({ error: `Media request failed (HTTP ${upstream.status})` }, 502, request);
         }
+        const filename = safeFilename(url.searchParams.get("filename"));
         const responseHeaders = new Headers();
         Object.entries(corsHeaders(request)).forEach(([key, value]) => responseHeaders.set(key, value));
-        responseHeaders.set("Content-Type", upstream.headers.get("Content-Type") || "audio/wav");
+        responseHeaders.set("Content-Type", mediaContentType(filename, upstream.headers.get("Content-Type")));
         const contentLength = upstream.headers.get("Content-Length");
         if (contentLength) responseHeaders.set("Content-Length", contentLength);
         const disposition = url.searchParams.get("download") === "1" ? "attachment" : "inline";
         responseHeaders.set(
           "Content-Disposition",
-          `${disposition}; filename="${safeFilename(url.searchParams.get("filename"))}"`,
+          `${disposition}; filename="${filename}"`,
         );
         return new Response(upstream.body, {
           status: 200,

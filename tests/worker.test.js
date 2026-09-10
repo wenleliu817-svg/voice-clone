@@ -4,13 +4,13 @@ const worker = require("../worker.js").default;
 async function run() {
   const originalFetch = global.fetch;
   let requestedUrl = "";
-  global.fetch = async url => {
-    requestedUrl = String(url);
-    return new Response(new Uint8Array([82, 73, 70, 70]), {
-      status: 200,
-      headers: { "Content-Type": "audio/wav", "Content-Length": "4" },
-    });
-  };
+    global.fetch = async url => {
+      requestedUrl = String(url);
+      return new Response(new Uint8Array([82, 73, 70, 70]), {
+        status: 200,
+        headers: { "Content-Type": "application/octet-stream;charset=UTF-8", "Content-Length": "4" },
+      });
+    };
 
   try {
     const request = new Request(
@@ -22,7 +22,7 @@ async function run() {
     assert.strictEqual(response.status, 200);
     assert.strictEqual(await response.text(), "RIFF");
     assert.strictEqual(requestedUrl, "https://ydstatic.com/audio/result.wav");
-    assert.match(response.headers.get("content-type"), /audio\/wav/);
+    assert.match(response.headers.get("content-type"), /^audio\/wav/);
     assert.match(response.headers.get("content-disposition"), /result\.wav/);
 
     const youdaoCdn = await worker.fetch(new Request(
