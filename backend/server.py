@@ -187,9 +187,33 @@ def is_allowed_media_url(value):
         hostname = (parsed.hostname or "").lower().rstrip(".")
         if parsed.scheme != "https" or not hostname:
             return False
-        return hostname == "youdao.com" or hostname.endswith(".youdao.com") or hostname == "ydstatic.com" or hostname.endswith(".ydstatic.com")
+        return (
+            hostname == "youdao.com"
+            or hostname.endswith(".youdao.com")
+            or hostname == "ydstatic.com"
+            or hostname.endswith(".ydstatic.com")
+            or hostname == "163yun.com"
+            or hostname.endswith(".163yun.com")
+        )
     except ValueError:
         return False
+
+
+def media_content_type(filename, upstream_type):
+    normalized = str(upstream_type or "").split(";", 1)[0].strip().lower()
+    extension = Path(str(filename or "")).suffix.lower()
+    extension_types = {
+        ".aac": "audio/aac",
+        ".flac": "audio/flac",
+        ".m4a": "audio/mp4",
+        ".mp3": "audio/mpeg",
+        ".ogg": "audio/ogg",
+        ".wav": "audio/wav",
+        ".webm": "audio/webm",
+    }
+    if not normalized or normalized in {"application/octet-stream", "binary/octet-stream"}:
+        return extension_types.get(extension, "audio/wav")
+    return normalized
 
 
 def is_lite_language(code):
@@ -843,7 +867,7 @@ def results(task_id):
 @app.route("/api/download", methods=["GET"])
 def download_audio():
     url = request.args.get("url", "").strip()
-    filename = request.args.get("filename", "audio.wav").strip()
+    filename = Path(request.args.get("filename", "audio.wav").strip()).name or "audio.wav"
     if not url:
         return jsonify({"error": "Missing url"}), 400
     if not is_allowed_media_url(url):
@@ -852,8 +876,13 @@ def download_audio():
         req = Request(url, method="GET")
         with urlopen(req, timeout=120) as resp:
             data = resp.read()
-            mime = resp.headers.get("Content-Type", "audio/wav")
-            return send_file(BytesIO(data), mimetype=mime, as_attachment=True, download_name=filename)
+            mime = media_content_type(filename, resp.headers.get("Content-Type"))
+            return send_file(
+                BytesIO(data),
+                mimetype=mime,
+                as_attachment=request.args.get("download") == "1",
+                download_name=filename,
+            )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

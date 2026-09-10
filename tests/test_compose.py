@@ -31,6 +31,31 @@ class ComposeFlowTest(unittest.TestCase):
         self.client = app.test_client()
         server.COMPOSE_JOBS.clear()
 
+    def test_download_proxies_youdao_cdn_as_playable_audio(self):
+        class FakeMediaResponse:
+            headers = {"Content-Type": "application/octet-stream;charset=UTF-8"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return b"RIFF...."
+
+        with patch("backend.server.urlopen", return_value=FakeMediaResponse()):
+            response = self.client.get(
+                "/api/download?url="
+                "https%3A%2F%2Ftts-gateway.nos-jd.163yun.com%2Fonline%2Fresult.wav"
+                "&filename=result.wav"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "audio/wav")
+        self.assertIn("inline", response.headers["Content-Disposition"])
+        self.assertEqual(response.data, b"RIFF....")
+
     def test_compose_returns_final_results_without_voice_id(self):
         with patch("backend.server.api_multipart_post") as mock_upload, patch("backend.server.api_audio_post") as mock_audio:
             mock_upload.return_value = {"code": "0", "data": {"voiceId": "voice-123"}}
