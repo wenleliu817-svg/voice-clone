@@ -1,5 +1,7 @@
 const STORAGE_KEYS = { language: "voice_clone_language", model: "voice_clone_model" };
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
+const TARGET_REFERENCE_SAMPLE_RATE = 16000;
+const SUPPORTED_AUDIO_EXTENSIONS = [".wav", ".mp3", ".m4a", ".aac", ".ogg", ".oga", ".webm", ".flac"];
 const LANGUAGE_OPTIONS = [
   { code: "zh-CHS", label: "中文", sample: "你好，欢迎使用有道智云声音复刻。愿这段全新的声音，为你的内容带来更多温度。" },
   { code: "en", label: "English", sample: "Hello, this voice was created with Youdao AI Cloud. Thank you for listening." },
@@ -29,6 +31,7 @@ let API_BASE = TRANSPORT.resolveBackendBase({
 let selectedLanguage = localStorage.getItem(STORAGE_KEYS.language) || "zh-CHS";
 let selectedModel = localStorage.getItem(STORAGE_KEYS.model) || "pro";
 let audioFile = null;
+let audioSourceFile = null;
 let referenceAudioUrl = "";
 let synthesisText = "";
 
@@ -99,6 +102,23 @@ function formatDuration(seconds) {
   return `${minutes}:${String(wholeSeconds % 60).padStart(2, "0")}`;
 }
 
+function getAudioExtension(file) {
+  const name = String(file?.name || "").toLowerCase();
+  const dot = name.lastIndexOf(".");
+  return dot >= 0 ? name.slice(dot) : "";
+}
+
+function isSupportedAudioFile(file) {
+  if (!file) return false;
+  return String(file.type || "").toLowerCase().startsWith("audio/")
+    || SUPPORTED_AUDIO_EXTENSIONS.includes(getAudioExtension(file));
+}
+
+function audioTypeLabel(file) {
+  const extension = getAudioExtension(file).replace(".", "").toUpperCase();
+  return extension || String(file?.type || "音频").replace(/^audio\//, "").toUpperCase();
+}
+
 async function readWavInfo(file) {
   const buffer = await file.arrayBuffer();
   const view = new DataView(buffer);
@@ -133,29 +153,111 @@ async function readWavInfo(file) {
   return { ...format, dataBytes, durationSeconds };
 }
 
+function writeAscii(view, offset, value) {
+  for (let index = 0; index < value.length; index += 1) {
+    view.setUint8(offset + index, value.charCodeAt(index));
+  }
+}
+
+function encodeMonoWav(audioBuffer, targetSampleRate = TARGET_REFERENCE_SAMPLE_RATE) {
+  const sourceLength = audioBuffer.length;
+  const sourceRate = audioBuffer.sampleRate;
+  const outputLength = Math.max(1, Math.ceil(sourceLength * targetSampleRate / sourceRate));
+  const output = new ArrayBuffer(44 + outputLength * 2);
+  const view = new DataView(output);
+  const channels = Array.from(
+    { length: audioBuffer.numberOfChannels },
+    (_, index) => audioBuffer.getChannelData(index),
+  );
+
+  writeAscii(view, 0, "RIFF");
+  view.setUint32(4, 36 + outputLength * 2, true);
+  writeAscii(view, 8, "WAVE");
+  writeAscii(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, targetSampleRate, true);
+  view.setUint32(28, targetSampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeAscii(view, 36, "data");
+  view.setUint32(40, outputLength * 2, true);
+
+  for (let index = 0; index < outputLength; index += 1) {
+    const sourcePosition = index * sourceRate / targetSampleRate;
+    const lower = Math.floor(sourcePosition);
+    const upper = Math.min(lower + 1, sourceLength - 1);
+    const ratio = sourcePosition - lower;
+    let sample = 0;
+    channels.forEach(channel => {
+      const lowerSample = channel[lower] || 0;
+      const upperSample = channel[upper] || lowerSample;
+      sample += lowerSample + (upperSample - lowerSample) * ratio;
+    });
+    sample /= Math.max(1, channels.length);
+    const clamped = Math.max(-1, Math.min(1, sample));
+    view.setInt16(44 + index * 2, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
+  }
+  return new Blob([output], { type: "audio/wav" });
+}
+
+async function normalizeAudioFile(file) {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) {
+    throw new Error("当前浏览器不支持音频转换，请使用最新版 Chrome、Edge 或 Safari");
+  }
+  const context = new AudioContextClass();
+  try {
+    const decoded = await context.decodeAudioData(await file.arrayBuffer());
+    const wavBlob = encodeMonoWav(decoded);
+    if (wavBlob.size > MAX_AUDIO_BYTES) {
+      throw new Error("转换后的音频超过 25MB，请缩短音频后再试");
+    }
+    const basename = String(file.name || "reference").replace(/\.[^.]+$/, "") || "reference";
+    const normalizedFile = new File([wavBlob], `${basename}.wav`, {
+      type: "audio/wav",
+      lastModified: Date.now(),
+    });
+    const info = await readWavInfo(normalizedFile);
+    return {
+      file: normalizedFile,
+      info,
+      sourceSampleRate: decoded.sampleRate,
+      sourceChannels: decoded.numberOfChannels,
+      sourceDuration: decoded.duration,
+    };
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("超过 25MB")) throw error;
+    throw new Error("浏览器无法解码这个音频，请改用 WAV、MP3、M4A、AAC、OGG 或 WebM 文件");
+  } finally {
+    await context.close().catch(() => {});
+  }
+}
+
 async function handleAudio(file) {
   if (!file) return;
-  if (!file.name.toLowerCase().endsWith(".wav") && file.type !== "audio/wav") {
-    showMessage("参考音频必须是 WAV 格式");
+  if (!isSupportedAudioFile(file)) {
+    showMessage("暂不支持这个文件格式，请使用 WAV、MP3、M4A、AAC、OGG 或 WebM");
     return;
   }
   if (file.size > MAX_AUDIO_BYTES) {
     showMessage("参考音频不能超过 25MB");
     return;
   }
+  setAudioStatus(`正在读取 ${audioTypeLabel(file)} 并转换为标准格式…`, "success");
   try {
-    const info = await readWavInfo(file);
-    if (info.channels !== 1) throw new Error("参考音频必须是单声道，请先转换后再上传");
-    if (![16000, 24000].includes(info.sampleRate)) throw new Error("参考音频采样率必须是 16kHz 或 24kHz");
+    const normalized = await normalizeAudioFile(file);
     clearAudio();
-    audioFile = file;
+    audioFile = normalized.file;
+    audioSourceFile = file;
     referenceAudioUrl = URL.createObjectURL(file);
     $("audio-filename").textContent = file.name;
-    $("audio-details").textContent = `${formatBytes(file.size)} · 单声道 · ${info.sampleRate / 1000}kHz · ${formatDuration(info.durationSeconds)}`;
+    $("audio-details").textContent = `${formatBytes(file.size)} · ${audioTypeLabel(file)} ${Math.round(normalized.sourceSampleRate / 100) / 10}kHz · 已转换为单声道 16kHz · ${formatDuration(normalized.info.durationSeconds)}`;
     $("reference-player").src = referenceAudioUrl;
     $("audio-dropzone").classList.add("hidden");
     $("audio-preview").classList.remove("hidden");
-    setAudioStatus("音频参数符合官方接口要求，可以开始复刻。", "success");
+    setAudioStatus(`已自动转换为有道兼容格式（${formatBytes(normalized.file.size)} WAV · 单声道 · 16kHz），可以开始复刻。`, "success");
   } catch (error) {
     showMessage(error.message);
     setAudioStatus(error.message, "error");
@@ -164,6 +266,7 @@ async function handleAudio(file) {
 
 function clearAudio() {
   audioFile = null;
+  audioSourceFile = null;
   $("audioFile").value = "";
   if (referenceAudioUrl) URL.revokeObjectURL(referenceAudioUrl);
   referenceAudioUrl = "";
@@ -370,7 +473,7 @@ async function startSynthesis() {
   const appSecret = $("appSecret").value.trim();
   const text = $("composeText").value.trim();
   if (!appKey || !appSecret) return showMessage("请先填写 AppID 和 App Secret");
-  if (!audioFile) return showMessage("请先上传符合要求的 WAV 参考音频");
+  if (!audioFile) return showMessage("请先上传一段可解码的参考音频");
   if (!text) return showMessage("请输入要合成的文本");
 
   synthesisText = text;

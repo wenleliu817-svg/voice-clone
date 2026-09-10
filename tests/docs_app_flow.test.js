@@ -8,9 +8,12 @@ function run() {
 
   assert.ok(appJs.includes('formData.append("audioFile", audioFile, audioFile.name);'), "reference audio should be sent");
   assert.ok(indexHtml.includes("AppID") && indexHtml.includes("App Secret"), "credentials should use AppID wording");
-  assert.ok(indexHtml.includes("audio/wav") && indexHtml.includes("参考音频"), "page should explain the WAV requirement");
+  assert.ok(indexHtml.includes("audio/*") && indexHtml.includes("MP3") && indexHtml.includes("参考音频"), "page should explain supported audio formats");
   assert.ok(appJs.includes("dataBytes"), "reference audio validation should inspect the WAV data chunk");
   assert.ok(appJs.includes("音频数据不能为空"), "empty WAV files should be rejected before submission");
+  assert.ok(appJs.includes("AudioContext"), "browser should decode common audio formats");
+  assert.ok(appJs.includes("encodeMonoWav"), "browser should normalize audio to mono WAV");
+  assert.ok(appJs.includes("自动转换为有道兼容格式"), "page should explain automatic audio normalization");
   assert.ok(appJs.includes("AbortController"), "network requests should have a timeout instead of hanging forever");
   assert.ok(appJs.includes("公共跨域代理或有道接口没有在"), "a stalled direct request should show a useful timeout message");
 

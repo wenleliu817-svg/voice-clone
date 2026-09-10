@@ -1,5 +1,5 @@
 const DEFAULT_API_ORIGIN = "https://openapi.youdao.com";
-const DEFAULT_BACKEND_ORIGIN = "https://voice-clone.onrender.com";
+const DEFAULT_BACKEND_ORIGIN = "https://voice-clone.wenleliu817.workers.dev";
 
 function normalizeBaseUrl(value) {
   return String(value || "").trim().replace(/\/+$/, "");
@@ -27,7 +27,7 @@ function isOfficialYoudaoOrigin(url) {
   }
 }
 
-function buildRequestUrl({ backendBase, path, targetOrigin = DEFAULT_API_ORIGIN }) {
+function buildRequestUrl({ backendBase, path }) {
   const base = normalizeBaseUrl(backendBase);
   if (base) {
     if (isOfficialYoudaoOrigin(base)) {

@@ -38,11 +38,11 @@
         <section class="panel panel-reference">
           <div class="panel-heading"><span class="index">02</span><div><h2>放入参考音频</h2><p>让模型学习你的音色与节奏</p></div></div>
           <div id="audio-dropzone" class="dropzone" tabindex="0" role="button" aria-label="上传参考音频">
-            <div class="drop-icon">↗</div><strong>拖入 WAV 音频</strong><span>或 <button id="choose-audio" type="button" class="text-button">从设备选择</button></span>
-            <input id="audioFile" type="file" accept=".wav,audio/wav" hidden>
-            <small>单声道 · 16k/24k · 建议 5–10 秒 · 最大 25MB</small>
+            <div class="drop-icon">↗</div><strong>拖入音频文件</strong><span>或 <button id="choose-audio" type="button" class="text-button">从设备选择</button></span>
+            <input id="audioFile" type="file" accept="audio/*,.wav,.mp3,.m4a,.aac,.ogg,.oga,.webm,.flac" hidden>
+            <small>支持 WAV、MP3、M4A、AAC、OGG、WebM · 自动转为单声道 16kHz · 最大 25MB</small>
           </div>
-          <div id="audio-preview" class="audio-preview hidden"><div class="audio-meta"><span class="audio-badge">WAV</span><div><strong id="audio-filename">—</strong><small id="audio-details">参考音频已就绪</small></div><button id="clear-audio" class="icon-button" type="button" aria-label="移除音频">×</button></div><audio id="reference-player" controls></audio></div>
+          <div id="audio-preview" class="audio-preview hidden"><div class="audio-meta"><span class="audio-badge">AUDIO</span><div><strong id="audio-filename">—</strong><small id="audio-details">参考音频已就绪</small></div><button id="clear-audio" class="icon-button" type="button" aria-label="移除音频">×</button></div><audio id="reference-player" controls></audio></div>
           <p id="audio-status" class="field-note"></p>
         </section>
 

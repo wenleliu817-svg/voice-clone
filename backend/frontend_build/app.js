@@ -1,5 +1,7 @@
 const STORAGE_KEYS = { language: "voice_clone_language", model: "voice_clone_model" };
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
+const TARGET_REFERENCE_SAMPLE_RATE = 16000;
+const SUPPORTED_AUDIO_EXTENSIONS = [".wav", ".mp3", ".m4a", ".aac", ".ogg", ".oga", ".webm", ".flac"];
 const LANGUAGE_OPTIONS = [
   { code: "zh-CHS", label: "中文", sample: "你好，欢迎使用有道智云声音复刻。愿这段全新的声音，为你的内容带来更多温度。" },
   { code: "en", label: "English", sample: "Hello, this voice was created with Youdao AI Cloud. Thank you for listening." },
@@ -29,6 +31,7 @@ let API_BASE = TRANSPORT.resolveBackendBase({
 let selectedLanguage = localStorage.getItem(STORAGE_KEYS.language) || "zh-CHS";
 let selectedModel = localStorage.getItem(STORAGE_KEYS.model) || "pro";
 let audioFile = null;
+let audioSourceFile = null;
 let referenceAudioUrl = "";
 let synthesisText = "";
 
@@ -46,18 +49,45 @@ function showMessage(message, type = "error") {
   window.setTimeout(() => node.remove(), 6000);
 }
 
-async function requestJson(path, options = {}, label = "请求") {
+async function requestJson(path, options = {}, label = "请求", timeoutMs = 30000) {
   const url = TRANSPORT.buildRequestUrl({ backendBase: API_BASE, path });
-  const response = await fetch(url, options);
-  const raw = await response.text();
-  let payload;
   try {
-    payload = JSON.parse(raw);
-  } catch {
-    throw new Error(`${label}返回了异常内容，请确认服务已正常部署`);
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      const raw = await response.text();
+      let payload;
+      try {
+        payload = JSON.parse(raw);
+      } catch {
+        throw new Error(`${label}返回了异常内容，请确认服务已正常部署`);
+      }
+      if (!response.ok) throw new Error(payload.error || payload.message || `${label}失败（HTTP ${response.status}）`);
+      return payload;
+    } finally {
+      window.clearTimeout(timer);
+    }
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error(`${label}超时：公共跨域代理或有道接口没有在 ${Math.round(timeoutMs / 1000)} 秒内响应，请稍后重试`);
+    }
+    throw error;
   }
-  if (!response.ok) throw new Error(payload.error || payload.message || `${label}失败（HTTP ${response.status}）`);
-  return payload;
+}
+
+async function generateSign(appKey, appSecret) {
+  const salt = crypto.randomUUID();
+  const curtime = String(Math.floor(Date.now() / 1000));
+  const encoded = new TextEncoder().encode(appKey + salt + curtime + appSecret);
+  const digest = await crypto.subtle.digest("SHA-256", encoded);
+  const sign = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+  return { salt, curtime, sign };
+}
+
+async function signedPayload(appKey, appSecret, values = {}) {
+  const { salt, curtime, sign } = await generateSign(appKey, appSecret);
+  return { appKey, curtime, salt, sign, signType: "v4", ...values };
 }
 
 function formatBytes(bytes) {
@@ -70,6 +100,23 @@ function formatDuration(seconds) {
   const wholeSeconds = Math.max(0, Math.round(Number(seconds) || 0));
   const minutes = Math.floor(wholeSeconds / 60);
   return `${minutes}:${String(wholeSeconds % 60).padStart(2, "0")}`;
+}
+
+function getAudioExtension(file) {
+  const name = String(file?.name || "").toLowerCase();
+  const dot = name.lastIndexOf(".");
+  return dot >= 0 ? name.slice(dot) : "";
+}
+
+function isSupportedAudioFile(file) {
+  if (!file) return false;
+  return String(file.type || "").toLowerCase().startsWith("audio/")
+    || SUPPORTED_AUDIO_EXTENSIONS.includes(getAudioExtension(file));
+}
+
+function audioTypeLabel(file) {
+  const extension = getAudioExtension(file).replace(".", "").toUpperCase();
+  return extension || String(file?.type || "音频").replace(/^audio\//, "").toUpperCase();
 }
 
 async function readWavInfo(file) {
@@ -106,29 +153,111 @@ async function readWavInfo(file) {
   return { ...format, dataBytes, durationSeconds };
 }
 
+function writeAscii(view, offset, value) {
+  for (let index = 0; index < value.length; index += 1) {
+    view.setUint8(offset + index, value.charCodeAt(index));
+  }
+}
+
+function encodeMonoWav(audioBuffer, targetSampleRate = TARGET_REFERENCE_SAMPLE_RATE) {
+  const sourceLength = audioBuffer.length;
+  const sourceRate = audioBuffer.sampleRate;
+  const outputLength = Math.max(1, Math.ceil(sourceLength * targetSampleRate / sourceRate));
+  const output = new ArrayBuffer(44 + outputLength * 2);
+  const view = new DataView(output);
+  const channels = Array.from(
+    { length: audioBuffer.numberOfChannels },
+    (_, index) => audioBuffer.getChannelData(index),
+  );
+
+  writeAscii(view, 0, "RIFF");
+  view.setUint32(4, 36 + outputLength * 2, true);
+  writeAscii(view, 8, "WAVE");
+  writeAscii(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, targetSampleRate, true);
+  view.setUint32(28, targetSampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeAscii(view, 36, "data");
+  view.setUint32(40, outputLength * 2, true);
+
+  for (let index = 0; index < outputLength; index += 1) {
+    const sourcePosition = index * sourceRate / targetSampleRate;
+    const lower = Math.floor(sourcePosition);
+    const upper = Math.min(lower + 1, sourceLength - 1);
+    const ratio = sourcePosition - lower;
+    let sample = 0;
+    channels.forEach(channel => {
+      const lowerSample = channel[lower] || 0;
+      const upperSample = channel[upper] || lowerSample;
+      sample += lowerSample + (upperSample - lowerSample) * ratio;
+    });
+    sample /= Math.max(1, channels.length);
+    const clamped = Math.max(-1, Math.min(1, sample));
+    view.setInt16(44 + index * 2, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
+  }
+  return new Blob([output], { type: "audio/wav" });
+}
+
+async function normalizeAudioFile(file) {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) {
+    throw new Error("当前浏览器不支持音频转换，请使用最新版 Chrome、Edge 或 Safari");
+  }
+  const context = new AudioContextClass();
+  try {
+    const decoded = await context.decodeAudioData(await file.arrayBuffer());
+    const wavBlob = encodeMonoWav(decoded);
+    if (wavBlob.size > MAX_AUDIO_BYTES) {
+      throw new Error("转换后的音频超过 25MB，请缩短音频后再试");
+    }
+    const basename = String(file.name || "reference").replace(/\.[^.]+$/, "") || "reference";
+    const normalizedFile = new File([wavBlob], `${basename}.wav`, {
+      type: "audio/wav",
+      lastModified: Date.now(),
+    });
+    const info = await readWavInfo(normalizedFile);
+    return {
+      file: normalizedFile,
+      info,
+      sourceSampleRate: decoded.sampleRate,
+      sourceChannels: decoded.numberOfChannels,
+      sourceDuration: decoded.duration,
+    };
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("超过 25MB")) throw error;
+    throw new Error("浏览器无法解码这个音频，请改用 WAV、MP3、M4A、AAC、OGG 或 WebM 文件");
+  } finally {
+    await context.close().catch(() => {});
+  }
+}
+
 async function handleAudio(file) {
   if (!file) return;
-  if (!file.name.toLowerCase().endsWith(".wav") && file.type !== "audio/wav") {
-    showMessage("参考音频必须是 WAV 格式");
+  if (!isSupportedAudioFile(file)) {
+    showMessage("暂不支持这个文件格式，请使用 WAV、MP3、M4A、AAC、OGG 或 WebM");
     return;
   }
   if (file.size > MAX_AUDIO_BYTES) {
     showMessage("参考音频不能超过 25MB");
     return;
   }
+  setAudioStatus(`正在读取 ${audioTypeLabel(file)} 并转换为标准格式…`, "success");
   try {
-    const info = await readWavInfo(file);
-    if (info.channels !== 1) throw new Error("参考音频必须是单声道，请先转换后再上传");
-    if (![16000, 24000].includes(info.sampleRate)) throw new Error("参考音频采样率必须是 16kHz 或 24kHz");
+    const normalized = await normalizeAudioFile(file);
     clearAudio();
-    audioFile = file;
+    audioFile = normalized.file;
+    audioSourceFile = file;
     referenceAudioUrl = URL.createObjectURL(file);
     $("audio-filename").textContent = file.name;
-    $("audio-details").textContent = `${formatBytes(file.size)} · 单声道 · ${info.sampleRate / 1000}kHz · ${formatDuration(info.durationSeconds)}`;
+    $("audio-details").textContent = `${formatBytes(file.size)} · ${audioTypeLabel(file)} ${Math.round(normalized.sourceSampleRate / 100) / 10}kHz · 已转换为单声道 16kHz · ${formatDuration(normalized.info.durationSeconds)}`;
     $("reference-player").src = referenceAudioUrl;
     $("audio-dropzone").classList.add("hidden");
     $("audio-preview").classList.remove("hidden");
-    setAudioStatus("音频参数符合官方接口要求，可以开始复刻。", "success");
+    setAudioStatus(`已自动转换为有道兼容格式（${formatBytes(normalized.file.size)} WAV · 单声道 · 16kHz），可以开始复刻。`, "success");
   } catch (error) {
     showMessage(error.message);
     setAudioStatus(error.message, "error");
@@ -137,6 +266,7 @@ async function handleAudio(file) {
 
 function clearAudio() {
   audioFile = null;
+  audioSourceFile = null;
   $("audioFile").value = "";
   if (referenceAudioUrl) URL.revokeObjectURL(referenceAudioUrl);
   referenceAudioUrl = "";
@@ -199,19 +329,103 @@ function setProgressStage(stage, message, progress = 0) {
 
 const wait = milliseconds => new Promise(resolve => window.setTimeout(resolve, milliseconds));
 
-async function pollComposeJob(jobId) {
-  for (let attempt = 0; attempt < 900; attempt += 1) {
-    const payload = await requestJson(`/api/compose/status/${encodeURIComponent(jobId)}`, {}, "查询合成进度");
-    const job = payload.data || {};
-    setProgressStage(job.stage, job.message, job.progress);
-    if (job.stage === "completed") {
-      renderResults(job.result || {});
+async function uploadReferenceAudio({ appKey, appSecret, model }) {
+  const audioInfo = await readWavInfo(audioFile);
+  const sign = await signedPayload(appKey, appSecret, {
+    name: `Voice_${Date.now()}`,
+    model,
+    sampleRate: String(audioInfo.sampleRate),
+    channel: "1",
+  });
+  const formData = new FormData();
+  Object.entries(sign).forEach(([key, value]) => formData.append(key, value));
+  formData.append("audioFile", audioFile, audioFile.name);
+  const payload = await requestJson("/tts_gateway/v2/upload", { method: "POST", body: formData }, "上传参考音频", 60000);
+  if (String(payload.code) !== "0") {
+    throw new Error(payload.message || payload.error || "参考音频上传失败");
+  }
+  const voiceId = String((payload.data || {}).voiceId || "").trim();
+  if (!voiceId) throw new Error("有道接口没有返回 voiceId");
+  return voiceId;
+}
+
+async function submitAsyncSynthesis({ appKey, appSecret, voiceId, text, model, language }) {
+  if (model === "lite" && !["zh-CHS", "en"].includes(language)) {
+    throw new Error("lite 模型只支持中文和英文");
+  }
+  const payload = await signedPayload(appKey, appSecret, {
+    voiceId,
+    format: $("format").value,
+    sampleRate: "16000",
+    channel: "1",
+    speed: $("speed").value,
+    volume: $("volume").value,
+    qList: [{ q: text }],
+  });
+  const response = await requestJson(
+    "/tts_gateway/v2/synthesis_async",
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+    "提交合成任务",
+    30000,
+  );
+  if (String(response.code) !== "0") {
+    throw new Error(response.message || response.error || "合成任务提交失败");
+  }
+  const taskId = String((response.data || {}).taskId || "").trim();
+  if (!taskId) throw new Error("有道接口没有返回 taskId");
+  return taskId;
+}
+
+async function fetchTaskProgress({ appKey, appSecret, taskId }) {
+  const payload = await signedPayload(appKey, appSecret, { taskId });
+  return requestJson(
+    "/tts_gateway/v2/get_progress",
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+    "查询合成进度",
+    30000,
+  );
+}
+
+async function fetchTaskResults({ appKey, appSecret, taskId }) {
+  const payload = await signedPayload(appKey, appSecret, { taskId });
+  const response = await requestJson(
+    "/tts_gateway/v2/get_result",
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+    "获取合成结果",
+    30000,
+  );
+  if (String(response.code) !== "0") {
+    throw new Error(response.message || response.error || "获取合成结果失败");
+  }
+  return Array.isArray(response.data) ? response.data : [];
+}
+
+async function pollYoudaoTask({ appKey, appSecret, taskId, voiceId }) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(attempt === 0 ? 1200 : 3000);
+    const payload = await fetchTaskProgress({ appKey, appSecret, taskId });
+    if (String(payload.code) !== "0") {
+      setProgressStage("synthesizing", payload.message || "有道正在处理，继续等待…", 75);
+      continue;
+    }
+    const data = payload.data || {};
+    const status = String(data.status || "PROCESSING").toUpperCase();
+    const total = Number(data.totalCount || 1);
+    const success = Number(data.successCount || 0);
+    const progress = status === "SUCCESS" || status === "PARTIAL_SUCCESS"
+      ? 95
+      : Math.max(70, Math.min(90, Math.round(70 + (success / Math.max(1, total)) * 20)));
+    setProgressStage("synthesizing", `有道合成处理中：${status}`, progress);
+    if (status === "SUCCESS" || status === "PARTIAL_SUCCESS") {
+      const results = await fetchTaskResults({ appKey, appSecret, taskId });
+      renderResults({ voiceId, taskId, results });
       return;
     }
-    if (job.stage === "failed") throw new Error(job.error || job.message || "合成失败");
-    await wait(2000);
+    if (["FAIL", "FAILED", "ERROR"].includes(status)) {
+      throw new Error(data.message || "有道合成任务失败");
+    }
   }
-  throw new Error("任务等待超过 30 分钟，请稍后重试");
+  throw new Error("任务等待超过 6 分钟，请稍后重试");
 }
 
 function escapeHtml(value) {
@@ -259,29 +473,29 @@ async function startSynthesis() {
   const appSecret = $("appSecret").value.trim();
   const text = $("composeText").value.trim();
   if (!appKey || !appSecret) return showMessage("请先填写 AppID 和 App Secret");
-  if (!audioFile) return showMessage("请先上传符合要求的 WAV 参考音频");
+  if (!audioFile) return showMessage("请先上传一段可解码的参考音频");
   if (!text) return showMessage("请输入要合成的文本");
 
   synthesisText = text;
   $("results-card").classList.add("hidden");
   $("btn-synthesize").disabled = true;
   $("btn-synthesize").querySelector("span:nth-child(2)").textContent = "正在生成…";
-  setProgressStage("received", "正在连接后端服务并提交任务…", 5);
+  setProgressStage("received", "正在通过前端体验链路提交请求…", 8);
   try {
-    const formData = new FormData();
-    formData.append("appKey", appKey);
-    formData.append("appSecret", appSecret);
-    formData.append("text", text);
-    formData.append("language", selectedLanguage);
-    formData.append("model", selectedModel);
-    formData.append("format", $("format").value);
-    formData.append("speed", $("speed").value);
-    formData.append("volume", $("volume").value);
-    formData.append("audio", audioFile, audioFile.name);
-    const payload = await requestJson("/api/compose/start", { method: "POST", body: formData }, "提交合成任务");
-    const jobId = payload.data?.jobId;
-    if (String(payload.code) !== "0" || !jobId) throw new Error(payload.message || "服务未返回任务编号");
-    await pollComposeJob(jobId);
+    setProgressStage("cloning", "正在上传参考音频并获取 voiceId…", 25);
+    const voiceId = await uploadReferenceAudio({ appKey, appSecret, model: selectedModel });
+    setProgressStage("clone_complete", "参考音频已上传，正在提交合成文本…", 55);
+    const taskId = await submitAsyncSynthesis({
+      appKey,
+      appSecret,
+      voiceId,
+      text,
+      model: selectedModel,
+      language: selectedLanguage,
+    });
+    setProgressStage("synthesizing", "合成任务已提交，正在等待有道返回音频…", 70);
+    await pollYoudaoTask({ appKey, appSecret, taskId, voiceId });
+    setProgressStage("completed", "合成完成，可以试听或下载。", 100);
     showMessage("声音生成完成，可以试听或下载。", "success");
   } catch (error) {
     setProgressStage("failed", error.message, 100);
