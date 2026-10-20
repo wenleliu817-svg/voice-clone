@@ -44,6 +44,8 @@ python3 server.py
 python3 -m unittest discover -s tests -v
 node tests/docs_app_flow.test.js
 node tests/transport.test.js
+node tests/worker.test.js
+node tests/task_recovery.test.js
 ```
 
 ## 部署
@@ -69,3 +71,11 @@ Cloudflare 中重新部署仓库后，可先访问 `/api/status` 验证 Worker�
 
 - [大模型语音复刻与同步合成](https://ai.youdao.com/DOCSIRMA/html/tts/api/dmxyyfkhc/index.html)
 - [大模型语音复刻与异步批量合成](https://ai.youdao.com/DOCSIRMA/html/tts/api/dmxyyfkybplhc/)
+
+## 故障恢复
+
+- 连接服务超过 10 秒会显示连接错误，不再停留在克隆阶段。
+- 鉴权、服务未开通、欠费等错误显示明确原因；网络波动及限流最多连续重试 3 次。
+- 每轮进度查询最多等待约 6 分钟（在途请求还受各自超时限制）；失败后点击“继续获取结果”，复用本页内已取得的 voiceId/taskId，不重复提交已确认的任务。刷新页面会清除该内存状态，不存储 App Secret。
+- 成功状态下结果暂未就绪会再次查询，空结果不会显示合成成功。
+- workers.dev 在部分网络可能无法解析或访问。健康检查失败时须恢复网络可达性或为 Worker 配置可访问的正式域名；前端更新不能绕过 DNS 或网络限制。
