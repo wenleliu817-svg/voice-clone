@@ -36,6 +36,7 @@ let referenceAudioUrl = "";
 let synthesisText = "";
 let pendingTask = null;
 let isRunning = false;
+let lastProgress = 0;
 
 function languageOption(code) {
   return LANGUAGE_OPTIONS.find(item => item.code === code) || LANGUAGE_OPTIONS[0];
@@ -74,7 +75,9 @@ async function requestJson(path, options = {}, label = "请求", timeoutMs = 300
     if (error.name === "AbortError") {
       throw new Error(`${label}超时：公共跨域代理或有道接口没有在 ${Math.round(timeoutMs / 1000)} 秒内响应，请稍后重试`);
     }
-    if (error instanceof TypeError) throw new Error(`${label}无法连接服务，请检查网络或代理服务是否可用；已提交的任务可点击继续获取结果。`);
+    if (error instanceof TypeError) throw new Error(pendingTask?.taskId
+      ? "网络连接中断，已保留本页任务。恢复连接后点击继续获取结果。"
+      : "当前网络无法连接语音服务，尚未提交合成任务。请检测连接，或联系页面提供者配置可访问的服务地址。");
     throw error;
   }
 }
@@ -326,7 +329,8 @@ function setProgressStage(stage, message, progress = 0) {
     node.classList.toggle("active", !failed && index === currentIndex);
     node.classList.toggle("failed", failed && index === Math.max(0, currentIndex));
   });
-  const safeProgress = Math.max(0, Math.min(100, Number(progress) || 0));
+  if (!failed) lastProgress = progress;
+  const safeProgress = Math.max(0, Math.min(100, Number(failed ? lastProgress : progress) || 0));
   $("progress-percent").textContent = `${safeProgress}%`;
   $("progress-bar").style.width = `${safeProgress}%`;
   $("progress-message").textContent = message || "正在处理…";
@@ -527,7 +531,7 @@ async function startSynthesis() {
   if (!text) return showMessage("请输入要合成的文本");
 
   isRunning = true;
-  const fingerprint = JSON.stringify([appKey, text, selectedModel, selectedLanguage, $("format").value, $("speed").value, $("volume").value]);
+  const fingerprint = JSON.stringify([API_BASE, appKey, text, selectedModel, selectedLanguage, $("format").value, $("speed").value, $("volume").value]);
   if (!pendingTask || pendingTask.file !== audioFile || pendingTask.fingerprint !== fingerprint) pendingTask = { file: audioFile, fingerprint };
   synthesisText = text;
   $("results-card").classList.add("hidden");
@@ -536,7 +540,7 @@ async function startSynthesis() {
   setProgressStage("received", "正在通过前端体验链路提交请求…", 8);
   try {
     if (!pendingTask.voiceId && !pendingTask.taskId) {
-      await requestJson("/api/status", {}, "连接语音服务", 10000);
+      await checkConnection();
     }
     setProgressStage("cloning", "正在上传参考音频并获取 voiceId…", 25);
     const voiceId = pendingTask.voiceId || await uploadReferenceAudio({ appKey, appSecret, model: selectedModel });
@@ -585,7 +589,48 @@ function resetForm() {
   $("message-region").replaceChildren();
 }
 
+async function checkConnection() {
+  const node = $("connection-status");
+  node.textContent = "正在检测语音服务…";
+  node.className = "field-note";
+  try {
+    const status = await requestJson("/api/status", {}, "连接语音服务", 10000);
+    if (status.ok !== true) throw new Error("服务响应不兼容，请确认部署的是本项目后端");
+    node.textContent = "连接正常，可以开始生成。";
+    node.className = "field-note success";
+    return status;
+  } catch (error) {
+    node.textContent = error.message;
+    node.className = "field-note error";
+    throw error;
+  }
+}
+
+async function applyBackend(value) {
+  if (isRunning) return showMessage("请等待当前任务结束后更换服务");
+  const previous = API_BASE;
+  try {
+    API_BASE = TRANSPORT.validateBackendBase(value);
+    await checkConnection();
+    pendingTask = null;
+    $("backend-url").value = API_BASE;
+    $("btn-synthesize").querySelector("span:nth-child(2)").textContent = "开始生成声音";
+    showMessage("已切换语音服务，仅在本次页面生效", "success");
+  } catch (error) {
+    API_BASE = previous;
+    $("connection-status").textContent = `${error.message} 当前服务仍为 ${previous}`;
+    showMessage(error.message);
+  }
+}
+
 function initApp() {
+  $("backend-url").value = API_BASE;
+  $("test-connection").addEventListener("click", () => checkConnection().catch(() => {}));
+  $("apply-backend").addEventListener("click", () => applyBackend($("backend-url").value));
+  $("restore-backend").addEventListener("click", () => applyBackend(TRANSPORT.resolveBackendBase({
+    locationProtocol: window.location.protocol, locationHostname: window.location.hostname, locationOrigin: window.location.origin,
+  })));
+
   renderLanguageOptions();
   if (!LANGUAGE_OPTIONS.some(item => item.code === selectedLanguage)) selectedLanguage = "zh-CHS";
   if (!["lite", "pro"].includes(selectedModel)) selectedModel = "pro";

@@ -34,6 +34,9 @@ let audioFile = null;
 let audioSourceFile = null;
 let referenceAudioUrl = "";
 let synthesisText = "";
+let pendingTask = null;
+let isRunning = false;
+let lastProgress = 0;
 
 function languageOption(code) {
   return LANGUAGE_OPTIONS.find(item => item.code === code) || LANGUAGE_OPTIONS[0];
@@ -63,7 +66,7 @@ async function requestJson(path, options = {}, label = "请求", timeoutMs = 300
       } catch {
         throw new Error(`${label}返回了异常内容，请确认服务已正常部署`);
       }
-      if (!response.ok) throw new Error(payload.error || payload.message || `${label}失败（HTTP ${response.status}）`);
+      if (!response.ok) throw payload.code ? apiError(payload, label) : new Error(payload.error || payload.message || `${label}失败（HTTP ${response.status}）`);
       return payload;
     } finally {
       window.clearTimeout(timer);
@@ -72,6 +75,9 @@ async function requestJson(path, options = {}, label = "请求", timeoutMs = 300
     if (error.name === "AbortError") {
       throw new Error(`${label}超时：公共跨域代理或有道接口没有在 ${Math.round(timeoutMs / 1000)} 秒内响应，请稍后重试`);
     }
+    if (error instanceof TypeError) throw new Error(pendingTask?.taskId
+      ? "网络连接中断，已保留本页任务。恢复连接后点击继续获取结果。"
+      : "当前网络无法连接语音服务，尚未提交合成任务。请检测连接，或联系页面提供者配置可访问的服务地址。");
     throw error;
   }
 }
@@ -236,6 +242,7 @@ async function normalizeAudioFile(file) {
 }
 
 async function handleAudio(file) {
+  if (isRunning) return showMessage("请等待当前任务结束后再更换音频");
   if (!file) return;
   if (!isSupportedAudioFile(file)) {
     showMessage("暂不支持这个文件格式，请使用 WAV、MP3、M4A、AAC、OGG 或 WebM");
@@ -265,6 +272,7 @@ async function handleAudio(file) {
 }
 
 function clearAudio() {
+  if (isRunning) return showMessage("请等待当前任务结束后再移除音频");
   audioFile = null;
   audioSourceFile = null;
   $("audioFile").value = "";
@@ -321,7 +329,8 @@ function setProgressStage(stage, message, progress = 0) {
     node.classList.toggle("active", !failed && index === currentIndex);
     node.classList.toggle("failed", failed && index === Math.max(0, currentIndex));
   });
-  const safeProgress = Math.max(0, Math.min(100, Number(progress) || 0));
+  if (!failed) lastProgress = progress;
+  const safeProgress = Math.max(0, Math.min(100, Number(failed ? lastProgress : progress) || 0));
   $("progress-percent").textContent = `${safeProgress}%`;
   $("progress-bar").style.width = `${safeProgress}%`;
   $("progress-message").textContent = message || "正在处理…";
@@ -342,7 +351,7 @@ async function uploadReferenceAudio({ appKey, appSecret, model }) {
   formData.append("audioFile", audioFile, audioFile.name);
   const payload = await requestJson("/tts_gateway/v2/upload", { method: "POST", body: formData }, "上传参考音频", 60000);
   if (String(payload.code) !== "0") {
-    throw new Error(payload.message || payload.error || "参考音频上传失败");
+    throw apiError(payload, "参考音频上传");
   }
   const voiceId = String((payload.data || {}).voiceId || "").trim();
   if (!voiceId) throw new Error("有道接口没有返回 voiceId");
@@ -369,7 +378,7 @@ async function submitAsyncSynthesis({ appKey, appSecret, voiceId, text, model, l
     30000,
   );
   if (String(response.code) !== "0") {
-    throw new Error(response.message || response.error || "合成任务提交失败");
+    throw apiError(response, "合成任务提交");
   }
   const taskId = String((response.data || {}).taskId || "").trim();
   if (!taskId) throw new Error("有道接口没有返回 taskId");
@@ -395,37 +404,81 @@ async function fetchTaskResults({ appKey, appSecret, taskId }) {
     30000,
   );
   if (String(response.code) !== "0") {
-    throw new Error(response.message || response.error || "获取合成结果失败");
+    throw apiError(response, "获取合成结果");
   }
-  return Array.isArray(response.data) ? response.data : [];
+  return Array.isArray(response.data) ? response.data.filter(item => item && /^https:\/\//i.test(item.mediaUrl || "")) : [];
+}
+
+function apiError(payload, label) {
+  const hints = {
+    "108": "AppID 无效，请检查应用信息",
+    "110": "请在控制台同时开通大模型声音复刻和大模型语音合成",
+    "202": "签名校验失败，请检查 AppID 与 App Secret",
+    "203": "当前代理出口 IP 不在应用白名单中",
+    "206": "时间戳无效，请校准电脑时间",
+    "207": "请求重复，请重新查询",
+    "401": "账户余额不足，请充值",
+    "900000": "音色不存在，请重新上传参考音频",
+    "900003": "任务不存在，请重新提交",
+  };
+  const error = new Error(`${label}失败（${payload.code}）：${hints[String(payload.code)] || payload.message || payload.error || "未知错误"}`);
+  error.restartTask = ["900000", "900003"].includes(String(payload.code));
+  return error;
 }
 
 async function pollYoudaoTask({ appKey, appSecret, taskId, voiceId }) {
-  for (let attempt = 0; attempt < 120; attempt += 1) {
+  const deadline = Date.now() + 6 * 60 * 1000;
+  let consecutiveErrors = 0;
+  let emptyResults = 0;
+  for (let attempt = 0; attempt < 120 && Date.now() < deadline; attempt += 1) {
     await wait(attempt === 0 ? 1200 : 3000);
-    const payload = await fetchTaskProgress({ appKey, appSecret, taskId });
-    if (String(payload.code) !== "0") {
-      setProgressStage("synthesizing", payload.message || "有道正在处理，继续等待…", 75);
+    let payload;
+    try {
+      payload = await fetchTaskProgress({ appKey, appSecret, taskId });
+    } catch (error) {
+      if (++consecutiveErrors >= 3) throw error;
+      setProgressStage("synthesizing", "网络暂时中断，正在重新查询已提交的任务…", 75);
       continue;
     }
+    if (String(payload.code) !== "0") {
+      if (["207", "303", "411", "412", "900001", "901000"].includes(String(payload.code)) && ++consecutiveErrors < 3) {
+        setProgressStage("synthesizing", "服务暂忙，正在重新查询…", 75);
+        await wait(3000);
+        continue;
+      }
+      throw apiError(payload, "查询合成进度");
+    }
+    consecutiveErrors = 0;
     const data = payload.data || {};
-    const status = String(data.status || "PROCESSING").toUpperCase();
+    const status = String(data.status || "").toUpperCase();
+    if (!["PROCESSING", "SUCCESS", "PARTIAL_SUCCESS", "FAIL", "FAILED", "ERROR"].includes(status)) {
+      throw new Error(`接口返回未知任务状态：${status || "空"}，请稍后继续获取结果`);
+    }
     const total = Number(data.totalCount || 1);
     const success = Number(data.successCount || 0);
-    const progress = status === "SUCCESS" || status === "PARTIAL_SUCCESS"
-      ? 95
-      : Math.max(70, Math.min(90, Math.round(70 + (success / Math.max(1, total)) * 20)));
-    setProgressStage("synthesizing", `有道合成处理中：${status}`, progress);
+    setProgressStage("synthesizing", `正在合成：已完成 ${success}/${total}，请稍候…`,
+      Math.max(70, Math.min(95, Math.round(70 + success / Math.max(1, total) * 25))));
     if (status === "SUCCESS" || status === "PARTIAL_SUCCESS") {
-      const results = await fetchTaskResults({ appKey, appSecret, taskId });
+      let results;
+      try {
+        results = await fetchTaskResults({ appKey, appSecret, taskId });
+      } catch (error) {
+        if (++emptyResults >= 3) throw error;
+        continue;
+      }
+      if (!results.length) {
+        if (++emptyResults >= 3) throw new Error("任务已处理，但尚未返回可播放的音频结果，请继续获取结果");
+        setProgressStage("synthesizing", "正在等待音频结果就绪…", 95);
+        continue;
+      }
       renderResults({ voiceId, taskId, results });
       return;
     }
     if (["FAIL", "FAILED", "ERROR"].includes(status)) {
-      throw new Error(data.message || "有道合成任务失败");
+      throw Object.assign(new Error(data.message || "有道合成任务失败，请重新生成"), { restartTask: true });
     }
   }
-  throw new Error("任务等待超过 6 分钟，请稍后重试");
+  throw new Error("本轮等待已结束，任务仍保留，请点击继续获取结果，无需再次克隆或提交");
 }
 
 function escapeHtml(value) {
@@ -460,7 +513,7 @@ function renderResults(result) {
 
   const results = Array.isArray(result.results) ? result.results : [];
   $("results-list").innerHTML = results.length ? results.map((item, index) => {
-    const mediaUrl = TRANSPORT.buildMediaUrl({ backendBase: API_BASE, mediaUrl: item.mediaUrl, filename: item.filename });
+    const mediaUrl = TRANSPORT.buildMediaUrl({ backendBase: API_BASE, mediaUrl: item.mediaUrl, filename: item.filename || `generated-audio.${$("format").value}` });
     const downloadUrl = `${mediaUrl}${mediaUrl.includes("?") ? "&" : "?"}download=1`;
     return `<article class="result-item"><div class="result-kicker"><span>AUDIO ${String(index + 1).padStart(2, "0")}</span><span>● READY</span></div><p>${escapeHtml(synthesisText)}</p><audio controls preload="metadata" src="${escapeHtml(mediaUrl)}"></audio><a class="download-button" href="${escapeHtml(downloadUrl)}" download>下载 ${escapeHtml(item.filename || "生成音频")}</a></article>`;
   }).join("") : '<div class="field-note">接口未返回可播放的音频。</div>';
@@ -469,6 +522,7 @@ function renderResults(result) {
 }
 
 async function startSynthesis() {
+  if (isRunning) return;
   const appKey = $("appKey").value.trim();
   const appSecret = $("appSecret").value.trim();
   const text = $("composeText").value.trim();
@@ -476,16 +530,23 @@ async function startSynthesis() {
   if (!audioFile) return showMessage("请先上传一段可解码的参考音频");
   if (!text) return showMessage("请输入要合成的文本");
 
+  isRunning = true;
+  const fingerprint = JSON.stringify([API_BASE, appKey, text, selectedModel, selectedLanguage, $("format").value, $("speed").value, $("volume").value]);
+  if (!pendingTask || pendingTask.file !== audioFile || pendingTask.fingerprint !== fingerprint) pendingTask = { file: audioFile, fingerprint };
   synthesisText = text;
   $("results-card").classList.add("hidden");
   $("btn-synthesize").disabled = true;
   $("btn-synthesize").querySelector("span:nth-child(2)").textContent = "正在生成…";
   setProgressStage("received", "正在通过前端体验链路提交请求…", 8);
   try {
+    if (!pendingTask.voiceId && !pendingTask.taskId) {
+      await checkConnection();
+    }
     setProgressStage("cloning", "正在上传参考音频并获取 voiceId…", 25);
-    const voiceId = await uploadReferenceAudio({ appKey, appSecret, model: selectedModel });
+    const voiceId = pendingTask.voiceId || await uploadReferenceAudio({ appKey, appSecret, model: selectedModel });
+    pendingTask.voiceId = voiceId;
     setProgressStage("clone_complete", "参考音频已上传，正在提交合成文本…", 55);
-    const taskId = await submitAsyncSynthesis({
+    const taskId = pendingTask.taskId || await submitAsyncSynthesis({
       appKey,
       appSecret,
       voiceId,
@@ -493,20 +554,27 @@ async function startSynthesis() {
       model: selectedModel,
       language: selectedLanguage,
     });
+    pendingTask.taskId = taskId;
     setProgressStage("synthesizing", "合成任务已提交，正在等待有道返回音频…", 70);
     await pollYoudaoTask({ appKey, appSecret, taskId, voiceId });
+    pendingTask = null;
     setProgressStage("completed", "合成完成，可以试听或下载。", 100);
     showMessage("声音生成完成，可以试听或下载。", "success");
   } catch (error) {
+    if (error.restartTask) pendingTask = null;
     setProgressStage("failed", error.message, 100);
     showMessage(error.message);
   } finally {
+    isRunning = false;
     $("btn-synthesize").disabled = false;
-    $("btn-synthesize").querySelector("span:nth-child(2)").textContent = "开始生成声音";
+    $("btn-synthesize").querySelector("span:nth-child(2)").textContent = pendingTask?.taskId ? "继续获取结果" : "开始生成声音";
   }
 }
 
 function resetForm() {
+  if (isRunning) return showMessage("请等待当前请求结束后再重置");
+  pendingTask = null;
+  $("btn-synthesize").querySelector("span:nth-child(2)").textContent = "开始生成声音";
   clearAudio();
   $("appKey").value = "";
   $("appSecret").value = "";
@@ -521,7 +589,48 @@ function resetForm() {
   $("message-region").replaceChildren();
 }
 
+async function checkConnection() {
+  const node = $("connection-status");
+  node.textContent = "正在检测语音服务…";
+  node.className = "field-note";
+  try {
+    const status = await requestJson("/api/status", {}, "连接语音服务", 10000);
+    if (status.ok !== true) throw new Error("服务响应不兼容，请确认部署的是本项目后端");
+    node.textContent = "连接正常，可以开始生成。";
+    node.className = "field-note success";
+    return status;
+  } catch (error) {
+    node.textContent = error.message;
+    node.className = "field-note error";
+    throw error;
+  }
+}
+
+async function applyBackend(value) {
+  if (isRunning) return showMessage("请等待当前任务结束后更换服务");
+  const previous = API_BASE;
+  try {
+    API_BASE = TRANSPORT.validateBackendBase(value);
+    await checkConnection();
+    pendingTask = null;
+    $("backend-url").value = API_BASE;
+    $("btn-synthesize").querySelector("span:nth-child(2)").textContent = "开始生成声音";
+    showMessage("已切换语音服务，仅在本次页面生效", "success");
+  } catch (error) {
+    API_BASE = previous;
+    $("connection-status").textContent = `${error.message} 当前服务仍为 ${previous}`;
+    showMessage(error.message);
+  }
+}
+
 function initApp() {
+  $("backend-url").value = API_BASE;
+  $("test-connection").addEventListener("click", () => checkConnection().catch(() => {}));
+  $("apply-backend").addEventListener("click", () => applyBackend($("backend-url").value));
+  $("restore-backend").addEventListener("click", () => applyBackend(TRANSPORT.resolveBackendBase({
+    locationProtocol: window.location.protocol, locationHostname: window.location.hostname, locationOrigin: window.location.origin,
+  })));
+
   renderLanguageOptions();
   if (!LANGUAGE_OPTIONS.some(item => item.code === selectedLanguage)) selectedLanguage = "zh-CHS";
   if (!["lite", "pro"].includes(selectedModel)) selectedModel = "pro";

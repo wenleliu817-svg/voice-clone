@@ -5,6 +5,17 @@ function normalizeBaseUrl(value) {
   return String(value || "").trim().replace(/\/+$/, "");
 }
 
+function validateBackendBase(value) {
+  const base = normalizeBaseUrl(value);
+  let parsed;
+  try { parsed = new URL(base); } catch { throw new Error("请输入完整的 HTTPS 服务地址"); }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || parsed.hash
+      || (parsed.pathname !== "/" && parsed.pathname !== "") || isOfficialYoudaoOrigin(base)) {
+    throw new Error("请填写你信任的 HTTPS 代理服务域名，不要填写有道官方地址、账户、查询参数或路径");
+  }
+  return parsed.origin;
+}
+
 function resolveBackendBase({
   queryBase = "",
   locationProtocol = "",
@@ -54,6 +65,7 @@ function buildMediaUrl({ backendBase, mediaUrl, filename = "audio.wav" }) {
 if (typeof window !== "undefined") {
   window.YoudaoVoiceCloneTransport = {
     normalizeBaseUrl,
+    validateBackendBase,
     isOfficialYoudaoOrigin,
     resolveBackendBase,
     buildRequestUrl,
@@ -66,6 +78,7 @@ if (typeof window !== "undefined") {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     normalizeBaseUrl,
+    validateBackendBase,
     isOfficialYoudaoOrigin,
     resolveBackendBase,
     buildRequestUrl,

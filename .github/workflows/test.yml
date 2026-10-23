@@ -1,0 +1,23 @@
+name: Verify voice clone
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r backend/requirements.txt
+      - run: |
+          node tests/docs_app_flow.test.js
+          node tests/transport.test.js
+          node tests/worker.test.js
+          node tests/task_recovery.test.js
+          node tests/backend_connection.test.js
+          python -m unittest discover -s tests -v

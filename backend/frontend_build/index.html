@@ -27,6 +27,17 @@
 
     <section class="workspace-grid">
       <div class="main-column">
+        <section class="panel panel-connection">
+          <div class="panel-heading"><div><h2>语音服务连接</h2><p>开始前先检查当前网络能否连接语音服务</p></div></div>
+          <p id="connection-status" class="field-note" role="status">尚未检测连接</p>
+          <button id="test-connection" class="ghost-button" type="button">检测连接</button>
+          <details><summary>更换服务地址</summary>
+            <label class="field"><span>HTTPS 服务地址</span><input id="backend-url" type="url" autocomplete="off" spellcheck="false"><small>仅使用你信任的服务：它会转发参考音频、合成文本和请求签名。App Secret 不会发送给代理。</small></label>
+            <button id="apply-backend" class="ghost-button" type="button">检测并使用此地址</button>
+            <button id="restore-backend" class="ghost-button" type="button">恢复默认地址</button>
+          </details>
+        </section>
+
         <section class="panel panel-credentials">
           <div class="panel-heading"><span class="index">01</span><div><h2>连接你的应用</h2><p>从有道智云控制台复制 AppID 与 App Secret</p></div><span class="secure-pill">本次使用</span></div>
           <div class="field-grid two">
@@ -73,7 +84,7 @@
           <div class="side-heading"><span>实时状态</span><strong id="progress-percent">0%</strong></div>
           <div class="progress-track"><span id="progress-bar"></span></div>
           <ol id="progress-steps" class="progress-list">
-            <li data-stage="received"><span>01</span><div><b>任务已接收</b><small>等待处理</small></div></li>
+            <li data-stage="received"><span>01</span><div><b>连接服务</b><small>检查网络连接</small></div></li>
             <li data-stage="cloning"><span>02</span><div><b>复刻参考音色</b><small>建立你的 voiceId</small></div></li>
             <li data-stage="clone_complete"><span>03</span><div><b>音色准备完成</b><small>开始提交文本</small></div></li>
             <li data-stage="synthesizing"><span>04</span><div><b>生成音频</b><small>等待有道返回结果</small></div></li>
@@ -93,7 +104,7 @@
     </section>
     <footer>VOICE FOUNDRY / POWERED BY YOUDAO AI CLOUD</footer>
   </main>
-  <script src="transport.js?v=20260910-3"></script>
-  <script src="app.js?v=20260910-3"></script>
+  <script src="transport.js?v=20261023-1"></script>
+  <script src="app.js?v=20261023-1"></script>
 </body>
 </html>

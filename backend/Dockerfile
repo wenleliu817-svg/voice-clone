@@ -8,7 +8,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy code
 COPY backend/server.py .
-COPY backend/frontend_build/ ./frontend_build/
+COPY docs/ ./frontend_build/
 
 EXPOSE 5001
 

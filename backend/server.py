@@ -525,7 +525,33 @@ def run_compose_job(job_id, params, audio_bytes, audio_filename):
 # --- API: Health ---
 @app.route("/api/status", methods=["GET"])
 def status():
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "service": "voice-clone", "gatewayVersion": 1})
+
+
+@app.route("/tts_gateway/v2/<operation>", methods=["POST"])
+def official_gateway(operation):
+    """Serve the same signed-request contract as the Worker, on any HTTPS host."""
+    if operation == "upload":
+        audio = request.files.get("audioFile")
+        if not audio:
+            return jsonify({"error": "Missing audioFile"}), 400
+        error = validate_reference_audio(audio)
+        if error:
+            return jsonify({"error": error}), 400
+        fields = {key: request.form[key] for key in (
+            "appKey", "salt", "curtime", "sign", "signType", "name", "model", "sampleRate", "channel"
+        ) if key in request.form}
+        files = {"audioFile": (secure_filename(audio.filename), audio.read())}
+        emotion = request.files.get("emotionAudioFile")
+        if emotion:
+            files["emotionAudioFile"] = (secure_filename(emotion.filename), emotion.read())
+        return jsonify(api_multipart_post(URI_UPLOAD, fields, files))
+    if operation not in {"synthesis_async", "get_progress", "get_result"}:
+        return jsonify({"error": "Not found"}), 404
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict) or "appSecret" in payload:
+        return jsonify({"error": "Expected signed JSON without appSecret"}), 400
+    return jsonify(api_json_post("/tts_gateway/v2/" + operation, payload))
 
 
 # --- API: Clone voice ---
