@@ -29,3 +29,14 @@ vm.runInContext(fs.readFileSync('docs/app.js','utf8').replace(/initApp\(\);\s*$/
  assert.equal(vm.runInContext('pendingTask',context),null);
  console.log('connection checks and backend switching passed');
 })().catch(e=>{console.error(e);process.exitCode=1;});
+
+(async()=>{
+ const c = vm.createContext({
+  window:{YoudaoVoiceCloneTransport:transport,location:{protocol:'https:',hostname:'test.example.com',origin:'https://test.example.com'},setTimeout:fn=>{queueMicrotask(fn);return 1;},clearTimeout(){}},
+  localStorage:{getItem:()=>null},URL,AbortController,document:{},
+  fetch:(_url,opts)=>new Promise((_resolve,reject)=>opts.signal.addEventListener('abort',()=>reject(Object.assign(new Error('aborted'),{name:'AbortError'}))))
+ });
+ vm.runInContext(fs.readFileSync('docs/app.js','utf8').replace(/initApp\(\);\s*$/,''),c);
+ await assert.rejects(vm.runInContext('requestJson("/api/status", {}, "连接语音服务", 10000)',c),/尚未上传音频/);
+ console.log('health timeout explains no task was submitted');
+})().catch(e=>{console.error(e);process.exitCode=1;});

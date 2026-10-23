@@ -73,6 +73,9 @@ async function requestJson(path, options = {}, label = "请求", timeoutMs = 300
     }
   } catch (error) {
     if (error.name === "AbortError") {
+      if (path === "/api/status") {
+        throw new Error("语音服务连接超时，尚未上传音频或提交合成。当前服务可能无法在此网络访问，或服务正在启动；请检测连接，持续失败时联系页面提供者更换服务地址。");
+      }
       throw new Error(`${label}超时：公共跨域代理或有道接口没有在 ${Math.round(timeoutMs / 1000)} 秒内响应，请稍后重试`);
     }
     if (error instanceof TypeError) throw new Error(pendingTask?.taskId
