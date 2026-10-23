@@ -101,3 +101,13 @@ Cloudflare 中重新部署仓库后，可先访问 `/api/status` 验证 Worker�
 部署后先访问生成地址的 `/api/status`，应返回 `ok: true`、`service: voice-clone`。在页面“更换服务地址”填写该域名并检测，成功后即可调用。若直接打开该后端域名，它将提供同源前端，不依赖 workers.dev。确认目标用户网络可达后，可将 `docs/transport.js` 的默认服务地址改为此实际地址，再发布 Pages。
 
 仅发布本次代码不等于开通了新的托管服务，不能将未部署的地址作为可用备用服务宣传。
+
+## Mac 分散用户当天应急使用
+
+[下载 Mac 本地启动包](https://wenleliu817-svg.github.io/voice-clone/downloads/voice-clone-mac.zip)
+
+将整个包解压，双击 `启动声音复刻.command`。需要 Python 3.9+（没有时从 Python 官方网站安装 macOS universal2 版），不需要安装本工程的 Flask 或其他依赖。启动器仅监听 `127.0.0.1` 的随机空闲端口并打开浏览器，每位用户填写自己的有道应用信息。本机网关通过 macOS 自带 curl 直接请求有道官方服务，避开 workers.dev。保持终端窗口开启，Control+C 退出。
+
+这是一份 Python 源码启动包，并非签名公证后的独立 Mac App。仍要求当前网络可以访问有道官方 API 和音频 CDN；没有内置密钥、参考音频或合成结果。
+
+维护者更新前端后运行 `python3 local-mac/build_package.py` 重新打包，并将生成的 `docs/downloads/voice-clone-mac.zip` 一并发布。源码位于 `local-mac/`，回归测试位于 `tests/test_local_gateway.py`。
