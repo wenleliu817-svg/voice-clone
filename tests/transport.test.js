@@ -13,6 +13,26 @@ function run() {
   assert.strictEqual(
     resolveBackendBase({
       queryBase: "",
+      configuredBase: "https://voice-clone.example.com/",
+      locationProtocol: "https:",
+      locationHostname: "wenleliu817-svg.github.io",
+    }),
+    "https://voice-clone.example.com"
+  );
+
+  assert.strictEqual(
+    resolveBackendBase({
+      queryBase: "",
+      configuredBase: "http://voice-clone.example.com",
+      locationProtocol: "https:",
+      locationHostname: "wenleliu817-svg.github.io",
+    }),
+    "https://voice-clone.wenleliu817.workers.dev"
+  );
+
+  assert.strictEqual(
+    resolveBackendBase({
+      queryBase: "",
       locationProtocol: "https:",
       locationHostname: "wenleliu817-svg.github.io",
     }),

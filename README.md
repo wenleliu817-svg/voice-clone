@@ -55,7 +55,25 @@ node tests/task_recovery.test.js
 - `wrangler.toml`：Worker 部署配置
 - `backend/`：可选的旧版 Flask 服务端
 
-GitHub Pages 页面默认请求：
+### 推荐：单域名部署
+
+对外给用户使用时，优先部署 `backend/` 容器，并把容器生成的 HTTPS 地址直接作为网页入口。容器会同时提供静态页面、`/api/status`、有道接口转发和音频下载，因此用户只需要打开一个地址，不依赖 `workers.dev` 的 DNS 或跨域链路。
+
+最省事的方式是使用仓库内的 [`render.yaml`](render.yaml)：
+
+1. 在 Render 选择 **New → Blueprint**，连接此 GitHub 仓库并选择 `voice-clone/render.yaml`。
+2. 等待服务变为 `Live`，打开服务地址的 `/api/status`，应返回 `{"ok":true,"service":"voice-clone"}`。
+3. 直接把服务根地址（例如 `https://<你的服务名>.onrender.com`）发给外部用户；打开后页面会自动使用同源后端。
+
+Render 免费实例会休眠，首次打开可能需要等待启动。若目标用户主要在中国大陆，建议把同一个 Docker 镜像部署到可备案的国内云服务器，并在 HTTPS 反向代理后运行；应用监听 `PORT` 环境变量，健康检查路径仍为 `/api/status`。
+
+### GitHub Pages 作为展示入口
+
+如果仍想保留 GitHub Pages，只需在仓库 **Settings → Secrets and variables → Actions → Variables** 新建 `VOICE_CLONE_BACKEND_ORIGIN`，值填写上面的容器根地址（只允许 HTTPS 域名，不带路径）。Pages 工作流会在发布时生成 `docs/config.js`，静态页面自动调用该后端；未配置变量时才回退到 Cloudflare Worker。
+
+页面“更换服务地址”仍可用于临时切换服务，但生产分享应优先使用单域名容器地址，避免让普通用户手动配置。
+
+未配置 `VOICE_CLONE_BACKEND_ORIGIN` 时，GitHub Pages 页面回退请求：
 
 ```text
 https://voice-clone.wenleliu817.workers.dev

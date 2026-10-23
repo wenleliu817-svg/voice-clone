@@ -5,6 +5,25 @@ function normalizeBaseUrl(value) {
   return String(value || "").trim().replace(/\/+$/, "");
 }
 
+function safeBackendOrigin(value) {
+  const base = normalizeBaseUrl(value);
+  if (!base) return "";
+  let parsed;
+  try { parsed = new URL(base); } catch { return ""; }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password
+      || parsed.search || parsed.hash || (parsed.pathname !== "/" && parsed.pathname !== "")
+      || isOfficialYoudaoOrigin(parsed.origin)) return "";
+  return parsed.origin;
+}
+
+// Pages can inject a deployment-specific backend at build time. The same
+// bundle is also served by the Flask container, where an empty value means
+// "use this page's own origin".
+function configuredBackendOrigin() {
+  if (typeof window === "undefined") return "";
+  return safeBackendOrigin(window.VOICE_CLONE_CONFIG?.backendOrigin || "");
+}
+
 function validateBackendBase(value) {
   const base = normalizeBaseUrl(value);
   let parsed;
@@ -18,12 +37,15 @@ function validateBackendBase(value) {
 
 function resolveBackendBase({
   queryBase = "",
+  configuredBase = "",
   locationProtocol = "",
   locationHostname = "",
   locationOrigin = "",
 } = {}) {
   const query = normalizeBaseUrl(queryBase);
   if (query) return query;
+  const configured = safeBackendOrigin(configuredBase) || configuredBackendOrigin();
+  if (configured) return configured;
   if (locationProtocol === "file:") return DEFAULT_BACKEND_ORIGIN;
   if (String(locationHostname || "").endsWith("github.io")) return DEFAULT_BACKEND_ORIGIN;
   return normalizeBaseUrl(locationOrigin) || DEFAULT_BACKEND_ORIGIN;
@@ -65,6 +87,7 @@ function buildMediaUrl({ backendBase, mediaUrl, filename = "audio.wav" }) {
 if (typeof window !== "undefined") {
   window.YoudaoVoiceCloneTransport = {
     normalizeBaseUrl,
+    configuredBackendOrigin,
     validateBackendBase,
     isOfficialYoudaoOrigin,
     resolveBackendBase,
@@ -78,6 +101,7 @@ if (typeof window !== "undefined") {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     normalizeBaseUrl,
+    configuredBackendOrigin,
     validateBackendBase,
     isOfficialYoudaoOrigin,
     resolveBackendBase,

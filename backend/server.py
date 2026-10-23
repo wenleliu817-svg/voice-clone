@@ -48,6 +48,8 @@ LANGUAGE_LOOKUP.update({"cn": "zh-CHS", "zh": "zh-CHS", "zh-cn": "zh-CHS", "chin
 MODEL_OPTIONS = {"lite", "pro"}
 ALLOWED_AUDIO_EXTENSIONS = {".wav"}
 MAX_REFERENCE_AUDIO_BYTES = 25 * 1024 * 1024
+MAX_REQUEST_BYTES = 30 * 1024 * 1024
+MAX_SYNTHESIS_TEXT_LENGTH = 2000
 DEFAULT_COMPOSE_TIMEOUT_SECONDS = 300
 DEFAULT_COMPOSE_POLL_INTERVAL_SECONDS = 3
 COMPOSE_JOBS = {}
@@ -59,6 +61,7 @@ GENERATED_DIR = UPLOAD_DIR / "generated"
 GENERATED_DIR.mkdir(exist_ok=True)
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_BYTES
 CORS(app)
 
 
@@ -525,7 +528,17 @@ def run_compose_job(job_id, params, audio_bytes, audio_filename):
 # --- API: Health ---
 @app.route("/api/status", methods=["GET"])
 def status():
-    return jsonify({"ok": True, "service": "voice-clone", "gatewayVersion": 1})
+    return jsonify({
+        "ok": True,
+        "service": "voice-clone",
+        "gatewayVersion": 1,
+        "deployment": "same-origin",
+    })
+
+
+@app.errorhandler(413)
+def request_too_large(_error):
+    return jsonify({"error": "请求体不能超过 30MB，请缩短参考音频后重试"}), 413
 
 
 @app.route("/tts_gateway/v2/<operation>", methods=["POST"])
@@ -610,6 +623,8 @@ def start_compose_job():
         return jsonify({"error": "Missing appKey or appSecret"}), 400
     if not text:
         return jsonify({"error": "Missing text"}), 400
+    if len(text) > MAX_SYNTHESIS_TEXT_LENGTH:
+        return jsonify({"error": f"合成文本不能超过 {MAX_SYNTHESIS_TEXT_LENGTH} 个字符"}), 400
     if not audio:
         return jsonify({"error": "Missing audio file"}), 400
     audio_error, audio_info = inspect_reference_audio(audio)
@@ -677,6 +692,8 @@ def compose():
         return jsonify({"error": "Missing appKey or appSecret"}), 400
     if not text:
         return jsonify({"error": "Missing text"}), 400
+    if len(text) > MAX_SYNTHESIS_TEXT_LENGTH:
+        return jsonify({"error": f"合成文本不能超过 {MAX_SYNTHESIS_TEXT_LENGTH} 个字符"}), 400
     if model not in MODEL_OPTIONS:
         return jsonify({"error": "Invalid model"}), 400
 

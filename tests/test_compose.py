@@ -259,6 +259,22 @@ class ComposeFlowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("音频数据不能为空", response.get_json()["error"])
 
+    def test_compose_rejects_text_longer_than_ui_limit(self):
+        response = self.client.post(
+            "/api/compose/start",
+            data={
+                "appKey": "app-key",
+                "appSecret": "app-secret",
+                "text": "x" * (server.MAX_SYNTHESIS_TEXT_LENGTH + 1),
+                "language": "en",
+                "model": "pro",
+                "audio": (io.BytesIO(wav_bytes()), "sample.wav"),
+            },
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("不能超过", response.get_json()["error"])
+
     def test_wait_for_task_retries_pending_result_after_success(self):
         progress = {"code": "0", "data": {"status": "SUCCESS"}}
         pending_result = {"code": "207", "message": "Result is not ready"}

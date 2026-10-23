@@ -28,6 +28,18 @@ jobs:
         uses: actions/checkout@v4
       - name: Configure Pages
         uses: actions/configure-pages@v5
+      - name: Configure backend origin
+        env:
+          VOICE_CLONE_BACKEND_ORIGIN: ${{ vars.VOICE_CLONE_BACKEND_ORIGIN }}
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const origin = (process.env.VOICE_CLONE_BACKEND_ORIGIN || '').trim().replace(/\/+$/, '');
+          if (origin && !/^https:\/\/[^/?#]+$/.test(origin)) {
+            throw new Error('VOICE_CLONE_BACKEND_ORIGIN must be an HTTPS origin without a path');
+          }
+          fs.writeFileSync('docs/config.js', `window.VOICE_CLONE_CONFIG = { backendOrigin: ${JSON.stringify(origin)} };\n`);
+          NODE
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:

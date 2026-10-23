@@ -7,6 +7,13 @@ class GatewayTest(unittest.TestCase):
         data = app.test_client().get('/api/status').get_json()
         self.assertEqual(data.get('service'), 'voice-clone')
         self.assertEqual(data.get('gatewayVersion'), 1)
+        self.assertEqual(data.get('deployment'), 'same-origin')
+
+    def test_same_origin_serves_deployment_config(self):
+        response = app.test_client().get('/config.js')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('backendOrigin', response.get_data(as_text=True))
+        response.close()
 
     def test_progress_forwards_signed_json_without_secret(self):
         payload = {'appKey':'test','sign':'signed','salt':'random','taskId':'task'}

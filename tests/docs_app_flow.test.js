@@ -5,10 +5,13 @@ const path = require("path");
 function run() {
   const appJs = fs.readFileSync(path.join(__dirname, "..", "docs", "app.js"), "utf8");
   const indexHtml = fs.readFileSync(path.join(__dirname, "..", "docs", "index.html"), "utf8");
+  const configJs = fs.readFileSync(path.join(__dirname, "..", "docs", "config.js"), "utf8");
 
   assert.ok(appJs.includes('formData.append("audioFile", audioFile, audioFile.name);'), "reference audio should be sent");
   assert.ok(indexHtml.includes("AppID") && indexHtml.includes("App Secret"), "credentials should use AppID wording");
   assert.ok(indexHtml.includes("audio/*") && indexHtml.includes("MP3") && indexHtml.includes("参考音频"), "page should explain supported audio formats");
+  assert.ok(indexHtml.includes('src="config.js'), "page should load deployment configuration before transport");
+  assert.ok(configJs.includes("backendOrigin"), "deployment configuration should expose backend origin");
   assert.ok(appJs.includes("dataBytes"), "reference audio validation should inspect the WAV data chunk");
   assert.ok(appJs.includes("音频数据不能为空"), "empty WAV files should be rejected before submission");
   assert.ok(appJs.includes("AudioContext"), "browser should decode common audio formats");
